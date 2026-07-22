@@ -32,6 +32,8 @@ use ark_relations::gr1cs::SynthesisError;
 use sonobe_primitives::{circuits::FCircuit, transcripts::poseidon::poseidon_circom_config};
 use std::collections::HashMap;
 
+pub mod sparsemt;
+
 pub const STATE_LEN: usize = 3;
 pub const VALUE_BITS: usize = 96;
 const WITHDRAW: u64 = 2;
