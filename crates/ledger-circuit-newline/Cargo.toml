@@ -15,3 +15,10 @@ ark-std = "0.6.0"
 ark-relations = "0.6.0"
 ark-r1cs-std = "0.6.0"
 ark-crypto-primitives = { version = "0.6.0", features = ["constraints", "sponge", "crh", "merkle_tree"] }
+sonobe-ivc = { git = "https://github.com/privacy-ethereum/sonobe", rev = "243391ebc14ad993f425802eb9dbaf44fdd54436", optional = true }
+
+[features]
+# Pulls the new-line decider crate to implement FCircuitEVMExt (state -> on-chain uint256[3]),
+# making LedgerCircuit renderable by the LegoGroth16 decider verifier template. Heavy (revm/askama)
+# and requires rustc >= 1.91 (revm); off by default so the circuit + unit tests stay light.
+evm = ["dep:sonobe-ivc"]

@@ -46,6 +46,26 @@ use crate::sparsemt::{constraints::MerkleSparseTreeGadget, MerkleSparseTree};
 /// Window size for the Schnorr `enforce_lt` sub-gadget (matches plasma-blind).
 pub const SIG_WINDOW: usize = 32;
 
+// Makes `LedgerCircuit` decider-ready: the new-line LegoGroth16 decider verifier template requires
+// `FCircuitEVMExt`, describing how the state `z` is encoded on-chain. Our `z = [root, opsAcc,
+// netsAcc]` is a fixed `uint256[3]`. Gated behind the (heavy) `evm` feature.
+#[cfg(feature = "evm")]
+mod evm_ext {
+    use crate::LedgerCircuit;
+    use sonobe_ivc::compilers::cyclefold::evm_verifier::{DeciderStateFragment, FCircuitEVMExt};
+
+    impl FCircuitEVMExt for LedgerCircuit {
+        fn decider_state_fragment(_: &Self::State) -> DeciderStateFragment {
+            DeciderStateFragment {
+                type_name: "uint256[3]".to_string(),
+                type_def: String::new(),
+                shape_check_body: String::new(),
+                flatten_body: "return z;".to_string(),
+            }
+        }
+    }
+}
+
 pub const STATE_LEN: usize = 3;
 pub const VALUE_BITS: usize = 96;
 const WITHDRAW: u64 = 2;
@@ -233,16 +253,24 @@ pub struct LedgerCircuit {
     pub reg_batch: usize,
     pub batch: usize,
     pub depth: usize,
+    /// IVC starting state returned by `dummy_state` (the genesis `[root, 0, 0]`). Lets the folding
+    /// scheme begin from a real tree root so active steps' inclusion checks are consistent.
+    pub init_state: [Fr; STATE_LEN],
 }
 
 impl LedgerCircuit {
     /// `batch` transfer ops, no registrations (Phase 2a compatibility).
     pub fn new(batch: usize, depth: usize) -> Self {
-        Self { c: cfg(), reg_batch: 0, batch, depth }
+        Self { c: cfg(), reg_batch: 0, batch, depth, init_state: [Fr::from(0u64); STATE_LEN] }
     }
     /// `reg_batch` registrations followed by `batch` transfer ops.
     pub fn new_with_regs(reg_batch: usize, batch: usize, depth: usize) -> Self {
-        Self { c: cfg(), reg_batch, batch, depth }
+        Self { c: cfg(), reg_batch, batch, depth, init_state: [Fr::from(0u64); STATE_LEN] }
+    }
+    /// Set the IVC genesis state (returned by `dummy_state`).
+    pub fn with_init_state(mut self, s: [Fr; STATE_LEN]) -> Self {
+        self.init_state = s;
+        self
     }
 }
 
@@ -307,7 +335,7 @@ impl FCircuit for LedgerCircuit {
     type ExternalOutputs = ();
 
     fn dummy_state(&self) -> Self::State {
-        [Fr::from(0u64); STATE_LEN]
+        self.init_state
     }
 
     fn same_state_shape(_a: &Self::State, _b: &Self::State) -> bool {

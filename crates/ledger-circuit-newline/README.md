@@ -51,8 +51,13 @@ branch, a **parallel track** to `main` (which holds the working classic prototyp
 - **Phases 1 / 2a / 2b / 3 (this crate): done. Full non-custody (A0 + A1) is enforced in-circuit** —
   the operator can neither forge/duplicate an account (A0) nor move a balance without the account's
   spend key (A1).
-- Phase 4 — decider/EVM re-target + `ProvenCheckpoint` wiring, **gated on PR #259 merging to `staging`**.
-- Phase 5 — ceremony / audit hardening.
+- **Phase 4 — decider measured:** the full circuit folds through Nova+CycleFold → LegoGroth16 and
+  verifies on-chain in revm for **696,556 gas** (cheaper than the classic line's 799,731); see
+  [docs/DECIDER_RESULTS.md](../../docs/DECIDER_RESULTS.md). Build `--features evm` to pull the
+  decider crate and get `FCircuitEVMExt` (state → `uint256[3]`). **Still open:** the
+  `ProvenCheckpoint` Solidity rewire (arity-6 Poseidon + `verifyDeciderProof` ABI).
+- **Phase 5 — hardening docs:** ceremony plan + audit scope + benchmarks in
+  [docs/CEREMONY_AND_AUDIT.md](../../docs/CEREMONY_AND_AUDIT.md).
 
 ## Caveats
 - The pinned sonobe rev is a **draft branch** (`revamp/decider`); re-pin to `staging` once the

@@ -52,8 +52,8 @@ ownership. The leaf binds both.
 | **2a ✅** | Adopt `sparsemt` as the base Merkle map (behaviour-equivalent; assigned-index). Native `MerkleSparseTree` + `MerkleSparseTreeGadget::recover_root`, Poseidon `Config`/`ConfigGadget`. | done — agreement + tamper tests green |
 | **2b ✅ — A0** | Unified indexed/interval account tree (Design B): leaf `(key, next_key, token, balance, nonce)`; in-circuit REGISTER = non-membership + split-insert; bounded `<` gadget; empty leaf = 0. | done — register agreement + **duplicate-key-rejected** tests green |
 | **3 ✅ — A1** | plasma-blind `schnorr` (Grumpkin) in-circuit verify on every debit; leaf binds a `pk_hash` spend-key commitment; padding carries a valid dummy sig. | done — bad-signature-rejected test green; ~5,136 constraints/verify [M] |
-| **4 — decider + on-chain** | Re-target prover to the LegoGroth16 decider; regenerate `DeciderVerifier.sol`; update `ProvenCheckpoint` (verify call + digest) and the escape hatch's on-chain leaf/Merkle hashing; re-measure gas | **PR #259 merged to `staging`**; forge tests green; gas re-measured at z_len=3 |
-| **5 — hardening** | New Groth16/LegoGroth16 phase-2 ceremony plan; audit realignment; full-bench measurement | ceremony transcripts; audit scope |
+| **4 ~ decider + on-chain** | LegoGroth16 decider runs on the real A0+A1 circuit; `DeciderVerifier.sol` rendered + verified in revm; gas measured. **`ProvenCheckpoint` on-chain rewire still open.** | decider EVM verify green; **gas = 696,556 [M]** — see [DECIDER_RESULTS.md](DECIDER_RESULTS.md) |
+| **5 — hardening** | Ceremony plan + audit scope (empty-leaf=0 deviation, KEY_BITS, moving pin) + consolidated benchmarks | docs written — see [CEREMONY_AND_AUDIT.md](CEREMONY_AND_AUDIT.md) |
 
 ## Phase 2 (A0) design note — corrected after reading plasma-blind
 
