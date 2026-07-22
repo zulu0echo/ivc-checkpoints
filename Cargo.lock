@@ -141,6 +141,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-grumpkin"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2c969a12ceed8881e5c66277dabd3e7a5aa2c72c9370f3f42eca3f2dd33a21a"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-r1cs-std",
+ "ark-std",
+]
+
+[[package]]
 name = "ark-poly"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -680,7 +693,9 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-crypto-primitives",
+ "ark-ec",
  "ark-ff",
+ "ark-grumpkin",
  "ark-r1cs-std",
  "ark-relations",
  "ark-std",

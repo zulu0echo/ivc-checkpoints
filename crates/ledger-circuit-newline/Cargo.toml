@@ -8,6 +8,8 @@ description = "Phase-1 port of the ledger F-circuit to the new (audited) sonobe 
 [dependencies]
 sonobe-primitives = { git = "https://github.com/privacy-ethereum/sonobe", rev = "243391ebc14ad993f425802eb9dbaf44fdd54436" }
 ark-bn254 = { version = "0.6.0", features = ["curve", "r1cs"] }
+ark-grumpkin = { version = "0.6.0", features = ["r1cs"] }
+ark-ec = "0.6.0"
 ark-ff = "0.6.0"
 ark-std = "0.6.0"
 ark-relations = "0.6.0"

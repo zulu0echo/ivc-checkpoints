@@ -33,6 +33,7 @@ use sonobe_primitives::{circuits::FCircuit, transcripts::poseidon::poseidon_circ
 use std::collections::HashMap;
 
 pub mod config;
+pub mod schnorr;
 pub mod sparsemt;
 
 use crate::config::{LedgerConfig, LedgerConfigGadget, TREE_H};
