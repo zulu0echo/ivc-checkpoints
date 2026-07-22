@@ -91,6 +91,18 @@ fn main() -> anyhow::Result<()> {
     let net_addrs: Vec<String> = art.nets.iter().map(|n| format!("0x{}", hex::encode(n.addr))).collect();
     let net_amounts: Vec<String> = art.nets.iter().map(|n| n.amount.to_string()).collect();
 
+    // Escape-hatch witness (for exercising ProvenCheckpoint.exit against the last proven root).
+    let ex = &wl.exit;
+    let exit_json = serde_json::json!({
+        "owner": format!("0x{}", hex::encode(ex.owner)),
+        "tokenId": ex.token_id,
+        "balance": ex.balance.to_string(),
+        "nonce": ex.nonce,
+        "key": fr_to_hex(&ex.key),
+        "siblings": ex.siblings.iter().map(|s| format!("{s}")).collect::<Vec<_>>(),
+        "isRight": ex.is_right,
+    });
+
     let proof_json = serde_json::json!({
         "epoch": art.epoch,
         "tokenId": art.token_id,
@@ -104,6 +116,7 @@ fn main() -> anyhow::Result<()> {
         "netAddrs": net_addrs,
         "netAmounts": net_amounts,
         "nets": nets_json,
+        "exit": exit_json,
         "calldataBytes": art.calldata_bytes,
         "evmVerifyGasRevm": art.evm_verify_gas,
     });

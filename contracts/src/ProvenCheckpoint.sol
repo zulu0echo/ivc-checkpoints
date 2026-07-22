@@ -68,6 +68,16 @@ contract ProvenCheckpoint {
     /// Consecutive unproven epochs since the last proven settlement.
     uint256 public unprovenStreak;
 
+    /// Escape hatch (§A2) + verifier immutability (§B1).
+    bool public verifierFrozen;
+    uint256 public constant TREE_DEPTH = 22;
+    mapping(bytes32 => bool) public exited; // keccak(tokenId, key) => already withdrawn
+
+    /// Branch-serving accountability (§A3): an attributable record of data-withholding.
+    uint256 public constant EXIT_DATA_WINDOW = 1 days;
+    mapping(uint256 => uint256) public exitDataRequestedAt; // epoch => timestamp (0 = none)
+    mapping(uint256 => bool) public exitDataServed; // epoch => served
+
     event EpochSettledProven(
         uint256 indexed epoch,
         uint256 indexed tokenId,
@@ -80,6 +90,10 @@ contract ProvenCheckpoint {
     event DeciderInitialized(address novaDecider, bytes32 ppHash);
     event DeciderProposed(address novaDecider, bytes32 ppHash, uint256 eta);
     event DeciderUpdated(address novaDecider, bytes32 ppHash);
+    event VerifierFrozen();
+    event Exited(uint256 indexed tokenId, address indexed owner, uint96 amount);
+    event ExitDataRequested(uint256 indexed epoch, address indexed requester);
+    event ExitDataServed(uint256 indexed epoch);
 
     error BadAuth();
     error BadNonce();
@@ -97,6 +111,9 @@ contract ProvenCheckpoint {
     error CatchupExceeded();
     error LengthMismatch();
     error AlreadyProven();
+    error Frozen();
+    error AlreadyExited();
+    error InclusionFailed();
 
     constructor(address governance_, bytes32 genesisRoot) {
         governance = governance_;
@@ -131,6 +148,7 @@ contract ProvenCheckpoint {
     /// Propose a verifier upgrade. Takes effect only after `DECIDER_TIMELOCK` via
     /// `executeDeciderUpgrade`, so the swap is public before it can be used.
     function proposeDeciderUpgrade(address decider, bytes32 ppHash_) external onlyGovernance {
+        if (verifierFrozen) revert Frozen();
         pendingDecider = decider;
         pendingPpHash = ppHash_;
         deciderEta = block.timestamp + DECIDER_TIMELOCK;
@@ -139,6 +157,7 @@ contract ProvenCheckpoint {
 
     /// Apply a proposed upgrade once the timelock has elapsed.
     function executeDeciderUpgrade() external onlyGovernance {
+        if (verifierFrozen) revert Frozen();
         if (deciderEta == 0) revert NoPendingUpgrade();
         if (block.timestamp < deciderEta) revert TimelockNotElapsed();
         novaDecider = pendingDecider;
@@ -149,9 +168,70 @@ contract ProvenCheckpoint {
         emit DeciderUpdated(novaDecider, ppHash);
     }
 
+    /// Renounce verifier upgradability — the verifier becomes immutable. One-way (§B1).
+    function freezeVerifier() external onlyGovernance {
+        verifierFrozen = true;
+        emit VerifierFrozen();
+    }
+
     /// Mark an epoch closed (starts the PROVER_TIMEOUT clock for the degradation path).
     function markEpochClosed(uint256 epoch) external {
         if (epochClosedAt[epoch] == 0) epochClosedAt[epoch] = block.timestamp;
+    }
+
+    // --- escape hatch: unilateral withdrawal against the last proven root (§A2) ------------
+
+    /// Withdraw your proven balance without operator involvement: prove your leaf opens to the
+    /// last proven `stateRoot`. Only the owner address (bound via `_fieldKey(msg.sender,...)`)
+    /// can call, and a per-(token,key) nullifier prevents double-exit. `siblings`/`isRight` are
+    /// the bottom-up Merkle path (isRight[i] = true means this node is the right child at level i).
+    ///
+    /// PROTOTYPE reconciliation note: after an exit, the *next* epoch's proof MUST debit the
+    /// exited leaf, or the operator could re-credit it off-chain. See docs/TRUST_MODEL.md.
+    function exit(
+        uint256 tokenId,
+        uint96 balance,
+        uint64 nonce,
+        uint256[22] calldata siblings,
+        bool[22] calldata isRight
+    ) external {
+        uint256 key = _fieldKey(msg.sender, tokenId);
+        uint256 node = PoseidonT5.hash4(key, tokenId, uint256(balance), uint256(nonce));
+        for (uint256 i = 0; i < TREE_DEPTH; i++) {
+            node = isRight[i]
+                ? PoseidonT5.hash2(siblings[i], node)
+                : PoseidonT5.hash2(node, siblings[i]);
+        }
+        if (bytes32(node) != lastProvenRoot) revert InclusionFailed();
+
+        bytes32 nk = keccak256(abi.encodePacked(tokenId, key));
+        if (exited[nk]) revert AlreadyExited();
+        exited[nk] = true;
+
+        balanceOf[tokenId][msg.sender] += balance;
+        emit Exited(tokenId, msg.sender, balance);
+    }
+
+    // --- branch-serving accountability (§A3) ------------------------------------------------
+
+    /// Create an on-chain, timestamped record that you requested your exit branch. Non-blocking
+    /// (so it can't be used to grief settlement); its purpose is attributability.
+    function requestExitData(uint256 epoch) external {
+        if (exitDataRequestedAt[epoch] == 0) exitDataRequestedAt[epoch] = block.timestamp;
+        emit ExitDataRequested(epoch, msg.sender);
+    }
+
+    /// The operator marks an epoch's exit data served (governance stands in for the org here).
+    function answerExitData(uint256 epoch) external onlyGovernance {
+        exitDataServed[epoch] = true;
+        emit ExitDataServed(epoch);
+    }
+
+    /// True once a request has gone unanswered past the window — attributable withholding. A
+    /// deployment MAY bind this to settlement (freeze) or slashing; left as policy here.
+    function exitDataOverdue(uint256 epoch) external view returns (bool) {
+        uint256 t = exitDataRequestedAt[epoch];
+        return t != 0 && !exitDataServed[epoch] && block.timestamp >= t + EXIT_DATA_WINDOW;
     }
 
     // --- proven settlement -----------------------------------------------------

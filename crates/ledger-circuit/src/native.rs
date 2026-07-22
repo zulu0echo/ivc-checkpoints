@@ -100,6 +100,16 @@ impl<F: PrimeField + Absorb, const D: usize> EpochExecutor<F, D> {
         [self.tree.root(), self.ops_acc, self.nets_acc]
     }
 
+    /// Exit witness for `key` against the *current* tree: `(balance, nonce, siblings, index_bits)`.
+    /// Fed to the on-chain escape hatch, which recomputes the leaf and opens it to `stateRoot`.
+    pub fn exit_witness(&self, key: F) -> Option<(u128, u64, Vec<F>, Vec<bool>)> {
+        let k = repr(&key);
+        let slot = *self.slots.get(&k)?;
+        let balance = *self.balances.get(&k)?;
+        let nonce = *self.nonces.get(&k)?;
+        Some((balance, nonce, self.tree.siblings(slot), self.tree.index_bits(slot)))
+    }
+
     pub fn sink_key(&self) -> F {
         self.sink_key
     }

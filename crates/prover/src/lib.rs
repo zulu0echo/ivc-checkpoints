@@ -49,6 +49,19 @@ pub struct NetEntry {
     pub amount: u128,
 }
 
+/// An account's escape-hatch witness at the final proven state: enough to open its leaf against
+/// `stateRoot` on-chain and pull its balance. `key == fieldKey(owner, tokenId)`.
+#[derive(Clone, Debug)]
+pub struct ExitWitness {
+    pub owner: [u8; 20],
+    pub token_id: u32,
+    pub key: Fr,
+    pub balance: u128,
+    pub nonce: u64,
+    pub siblings: Vec<Fr>,   // len DEPTH
+    pub is_right: Vec<bool>, // len DEPTH (true => this node is the right child)
+}
+
 /// Everything the Foundry side needs to exercise `settleEpochProven` for one epoch.
 pub struct EpochArtifacts {
     pub epoch: u64,

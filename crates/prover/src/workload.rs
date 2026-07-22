@@ -4,7 +4,7 @@
 use ark_bn254::Fr;
 use ledger_circuit::{native::EpochExecutor, EpochStepInput, OpWitness, BATCH, DEPTH};
 
-use crate::{field_key, NetEntry};
+use crate::{field_key, ExitWitness, NetEntry};
 
 /// Workload shape. Loads fund accounts; spends move value to payees; one withdraw
 /// per payee settles its net at epoch close.
@@ -57,6 +57,8 @@ pub struct Workload {
     pub nets: Vec<NetEntry>,
     pub transfers_root: [u8; 32],
     pub op_count: usize,
+    /// One account's escape-hatch witness at the final proven state (for exercising `exit`).
+    pub exit: ExitWitness,
 }
 
 /// Build a synthetic epoch. Deterministic given `spec` and `epoch`.
@@ -75,10 +77,18 @@ pub fn build(spec: WorkloadSpec, epoch: u64) -> Workload {
     let pool_funding: u128 = (spec.loads as u128 + 1) * 1_000;
     exec.register(pool, token, pool_funding, 0);
 
-    let accounts: Vec<Fr> =
-        (0..spec.n_accounts).map(|i| Fr::from(1_000_000u64 + i as u64)).collect();
-    for b in &accounts {
-        exec.register(*b, token, 0, 0);
+    // Accounts: address-keyed (like payees), so an owner can later exit via the escape hatch.
+    let mut account_addrs: Vec<[u8; 20]> = Vec::with_capacity(spec.n_accounts);
+    let mut accounts: Vec<Fr> = Vec::with_capacity(spec.n_accounts);
+    for i in 0..spec.n_accounts {
+        let mut addr = [0u8; 20];
+        addr[0] = 0xAC; // distinct prefix from payees (which start 0x00)
+        addr[19] = (i & 0xff) as u8;
+        addr[18] = ((i >> 8) & 0xff) as u8;
+        let key = field_key(addr, token_id);
+        exec.register(key, token, 0, 0);
+        account_addrs.push(addr);
+        accounts.push(key);
     }
 
     // Payees: on-chain addresses + matching field keys.
@@ -124,6 +134,19 @@ pub fn build(spec: WorkloadSpec, epoch: u64) -> Workload {
 
     let native_zn = exec.state().to_vec();
 
+    // Escape-hatch witness for account 0 (which retains a nonzero balance) at the final root.
+    let (balance, nonce, siblings, is_right) =
+        exec.exit_witness(accounts[0]).expect("account 0 registered");
+    let exit = ExitWitness {
+        owner: account_addrs[0],
+        token_id,
+        key: accounts[0],
+        balance,
+        nonce,
+        siblings,
+        is_right,
+    };
+
     // nets in the exact order the circuit folded them (executor.nets).
     let nets: Vec<NetEntry> = exec
         .nets
@@ -152,7 +175,7 @@ pub fn build(spec: WorkloadSpec, epoch: u64) -> Workload {
         }
     }
 
-    Workload { token_id, z0, native_zn, batches, nets, transfers_root, op_count }
+    Workload { token_id, z0, native_zn, batches, nets, transfers_root, op_count, exit }
 }
 
 fn transfers_root_for(epoch: u64) -> [u8; 32] {

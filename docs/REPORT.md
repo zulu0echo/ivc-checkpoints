@@ -258,10 +258,14 @@ hash. Two implications:
 
 ### Honest scope
 This is a **prototype**, and its usefulness is **specific**: it strengthens the *integrity* of an
-**operator-custodied** off-chain balance ledger. It does **not** make amounts confidential (payee
-payouts remain visible on-chain, as in any netting checkpoint), and it does **not** change who
-custodies funds — the operator still holds keys and authorizes transfers; the proof adds
-*integrity*, not decentralization. Before production it needs, at minimum: a real
+operator-run off-chain balance ledger. It does **not** make amounts confidential (payee payouts
+remain visible on-chain, as in any netting checkpoint). On custody, an **escape hatch** (`exit`)
+is now implemented — a user can always withdraw their proven balance with their own key, so funds
+**can't be trapped**; but the operator can still move a balance in a valid transition *before* you
+exit until in-circuit user-signed debits land (deferred — see
+[DECENTRALIZATION.md](DECENTRALIZATION.md)). So today's boundary is **non-custodial funds with an
+operator trusted only for liveness**, not full non-custody. Before production it needs, at minimum:
+a real
 key-to-tree-position binding (the current tree doesn't enforce it), a real trusted-setup ceremony
 (this uses a dev-mode setup), security audits, and the prover numbers re-measured on 64 GB
 hardware. These are enumerated in [TRUST_MODEL.md §6](TRUST_MODEL.md).
@@ -274,6 +278,7 @@ hardware. These are enumerated in [TRUST_MODEL.md §6](TRUST_MODEL.md).
   constraints in ~1 min; the full fold→prove→on-chain-verify path on modest hardware via
   `light-test`.
 - **Where it fits (and where it doesn't):** [USE_CASES.md](USE_CASES.md).
+- **Sovereignty & exit roadmap:** [DECENTRALIZATION.md](DECENTRALIZATION.md).
 - **Trust & privacy:** [TRUST_MODEL.md](TRUST_MODEL.md).
 - **Reproduce the numbers here:** `results/comparison.md` (measured vs model),
   `results/measured.json`.

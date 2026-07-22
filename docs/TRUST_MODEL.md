@@ -94,8 +94,17 @@ protects the *record* from being arithmetically inconsistent.
 - **Governance capture** — a malicious verifier swap forges everything. Defended:
   `initializeDecider` is one-time bootstrap; upgrades go `proposeDeciderUpgrade` → wait
   `DECIDER_TIMELOCK` → `executeDeciderUpgrade`, so a swap is public before it can be used.
-  Verified by `GovernanceTimelockTest`. (PROTOTYPE: single-address governance stands in for a
-  real multisig.)
+  Verified by `GovernanceTimelockTest`. `freezeVerifier()` can additionally renounce
+  upgradability entirely (immutable verifier). (PROTOTYPE: single-address governance stands in
+  for a real multisig.)
+- **Fund entrapment — mitigated (escape hatch).** A user can always `exit`: prove their leaf
+  opens to the last proven `stateRoot` (on-chain Poseidon path, `hash2` pinned to the circuit),
+  bound to `msg.sender` via `_fieldKey`, with a per-`(token,key)` nullifier. Funds can't be
+  trapped by a rogue/vanished operator. Verified by `EscapeHatchTest`. Reconciliation caveat:
+  the next epoch's proof must debit an exited leaf (else the operator could re-credit it
+  off-chain) — enforcing that in-circuit is deferred. Note this does **not** yet prevent an
+  operator moving a balance *before* exit (that needs in-circuit user-signed debits — deferred;
+  see [DECENTRALIZATION.md](DECENTRALIZATION.md)).
 - **Degradation-path abuse** — the `PROVER_TIMEOUT`/`UNPROVEN` legacy path is a deliberate trust
   downgrade; an adversary who can *induce* prover outages forces settlement onto it. Bounded by
   `CATCHUP_EPOCHS` and made publicly attributable (`EpochSettledUnproven`); the proven chain only
@@ -189,10 +198,14 @@ Ordered by importance. Items 1–3 are blocking for any non-prototype use.
 ## 7. Trust delta vs a commit-only checkpoint
 
 - **Removed:** trust in the operator's arithmetic; the need for a bonded fraud-proof challenge
-  game; the challenge-window delay to finality.
+  game; the challenge-window delay to finality; **fund entrapment** (the escape hatch makes
+  proven balances always withdrawable — funds can no longer be trapped or frozen).
 - **Added (threat):** trusted-setup ceremony; unaudited proving stack; prover-liveness
-  dependency; verifier/`ppHash` governance surface (mitigated by timelock); a circuit-soundness
-  class (incl. the key-binding gap).
+  dependency; verifier/`ppHash` governance surface (mitigated by timelock + freeze); a
+  circuit-soundness class (incl. the key-binding gap).
+- **Reduced but not eliminated — custody:** funds are now non-custodial *for exit* (you can
+  always leave with your key), but the operator can still move a balance in a valid transition
+  *before* you exit until in-circuit user-signed debits land (deferred; DECENTRALIZATION.md).
 - **Added (privacy):** epoch op-count via `i` — mitigated by constant-`i` padding; a hard
   "prover stays in-house" requirement.
 - **Unchanged:** amounts visible on-chain, operator custody, and the on-chain linkability

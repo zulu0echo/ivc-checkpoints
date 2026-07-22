@@ -26,6 +26,13 @@ abstract contract CheckpointFixture is Test {
     address[] internal tos;
     uint96[] internal amounts;
 
+    // escape-hatch witness for one account
+    address internal exitOwner;
+    uint96 internal exitBalance;
+    uint64 internal exitNonce;
+    uint256[22] internal exitSiblings;
+    bool[22] internal exitIsRight;
+
     function _load() internal {
         string memory json = vm.readFile("./generated/proof.json");
         epoch = vm.parseJsonUint(json, ".epoch");
@@ -49,6 +56,18 @@ abstract contract CheckpointFixture is Test {
         amounts = new uint96[](amt.length);
         for (uint256 i = 0; i < amt.length; i++) {
             amounts[i] = uint96(amt[i]);
+        }
+
+        exitOwner = vm.parseJsonAddress(json, ".exit.owner");
+        exitBalance = uint96(vm.parseJsonUint(json, ".exit.balance"));
+        exitNonce = uint64(vm.parseJsonUint(json, ".exit.nonce"));
+        uint256[] memory sibs = vm.parseJsonUintArray(json, ".exit.siblings");
+        require(sibs.length == 22, "siblings len");
+        bool[] memory rs = vm.parseJsonBoolArray(json, ".exit.isRight");
+        require(rs.length == 22, "isRight len");
+        for (uint256 i = 0; i < 22; i++) {
+            exitSiblings[i] = sibs[i];
+            exitIsRight[i] = rs[i];
         }
     }
 
@@ -186,5 +205,59 @@ contract GovernanceTimelockTest is CheckpointFixture {
         _deploy(prevRoot);
         vm.expectRevert(ProvenCheckpoint.NoPendingUpgrade.selector);
         pc.executeDeciderUpgrade();
+    }
+
+    function test_freeze_makes_verifier_immutable() public {
+        _deploy(prevRoot);
+        pc.freezeVerifier();
+        assertTrue(pc.verifierFrozen(), "frozen");
+        vm.expectRevert(ProvenCheckpoint.Frozen.selector);
+        pc.proposeDeciderUpgrade(address(0xBEEF), bytes32(uint256(1)));
+    }
+}
+
+/// Escape hatch (§A2): a user unilaterally withdraws their proven balance against the last
+/// proven root, with no operator involvement.
+contract EscapeHatchTest is CheckpointFixture {
+    function setUp() public {
+        _load();
+    }
+
+    function _settle() internal {
+        _deploy(prevRoot);
+        bytes memory sig = _sign(0, tos, amounts);
+        pc.settleEpochProven(epoch, transfersRoot, zi, tokenId, tos, amounts, 0, sig, steps, proof);
+        assertEq(uint256(pc.lastProvenRoot()), zi[0], "chain advanced to newStateRoot");
+    }
+
+    function test_exit_pulls_proven_balance() public {
+        _settle();
+        vm.prank(exitOwner);
+        pc.exit(tokenId, exitBalance, exitNonce, exitSiblings, exitIsRight);
+        assertEq(pc.balanceOf(tokenId, exitOwner), exitBalance, "proven balance withdrawn");
+    }
+
+    function test_double_exit_rejected() public {
+        _settle();
+        vm.prank(exitOwner);
+        pc.exit(tokenId, exitBalance, exitNonce, exitSiblings, exitIsRight);
+        vm.prank(exitOwner);
+        vm.expectRevert(ProvenCheckpoint.AlreadyExited.selector);
+        pc.exit(tokenId, exitBalance, exitNonce, exitSiblings, exitIsRight);
+    }
+
+    function test_tampered_balance_rejected() public {
+        _settle();
+        vm.prank(exitOwner);
+        vm.expectRevert(ProvenCheckpoint.InclusionFailed.selector);
+        pc.exit(tokenId, exitBalance + 1, exitNonce, exitSiblings, exitIsRight);
+    }
+
+    function test_wrong_caller_rejected() public {
+        _settle();
+        // A different caller derives a different key, so the leaf no longer opens to the root.
+        vm.prank(address(0xDEAD));
+        vm.expectRevert(ProvenCheckpoint.InclusionFailed.selector);
+        pc.exit(tokenId, exitBalance, exitNonce, exitSiblings, exitIsRight);
     }
 }

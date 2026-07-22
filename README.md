@@ -23,7 +23,8 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 > 📄 **New to IVC / folding schemes or sonobe?** Start with the
 > **[technical report](docs/REPORT.md)** — a self-contained explainer of what this is, what it
 > costs, and why it matters, with diagrams and charts. Where it fits (and where it doesn't):
-> **[docs/USE_CASES.md](docs/USE_CASES.md)**. Security details:
+> **[docs/USE_CASES.md](docs/USE_CASES.md)**. Sovereignty & exit roadmap:
+> **[docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)**. Security details:
 > **[docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)**.
 
 ---
@@ -82,8 +83,9 @@ vendor/                  Pinned arkworks (algebra/snark/std) + groth16 + flyingn
 | On-chain `withdrawalsAcc` Poseidon == proof `netsAcc` | `PoseidonT5.foldNet`, `NetsAccMismatch` |
 | State-root chaining (`z_0` = prev proven root) | contract builds `z0` from `lastProvenRoot` |
 | Prover-outage / UNPROVEN degradation, catch-up bound | `settleEpoch`, `EpochStatus`, `unprovenStreak` |
-| Governance-gated verifier + `ppHash` (timelocked) | `initializeDecider` / `proposeDeciderUpgrade` / `executeDeciderUpgrade` |
+| Governance-gated verifier + `ppHash` (timelocked, freezable) | `initializeDecider` / `proposeDeciderUpgrade` / `executeDeciderUpgrade` / `freezeVerifier` |
 | Public inputs are only `(i, z_0, z_n)` | verifier called with contract-supplied z0/zi + opaque proof |
+| **Escape hatch** — unilateral withdrawal vs. last proven root | `exit` (Poseidon inclusion + owner binding + nullifier) — see [DECENTRALIZATION.md](docs/DECENTRALIZATION.md) |
 
 ---
 
@@ -153,8 +155,12 @@ cargo run -p prover --bin gen_poseidon
   valid proof **accepted**, mutated calldata **rejected**, wrong prev-root **rejected**, nets
   mismatch **rejected** (`contracts/test/ProvenCheckpoint.t.sol`).
 - Poseidon on-chain == circuit `h4` (`contracts/test/PoseidonT5.t.sol`, arkworks-computed fixture).
-- Verifier upgrades are timelocked; bootstrap/propose/execute + reverts tested
-  (`GovernanceTimelockTest`).
+- Verifier upgrades are timelocked and can be frozen immutable; bootstrap/propose/execute/freeze
+  + reverts tested (`GovernanceTimelockTest`).
+- **Escape hatch:** a user unilaterally withdraws their proven balance against the last proven
+  root — accepted for the owner, rejected on double-exit / tampered balance / wrong caller
+  (`EscapeHatchTest`); the on-chain Merkle-node hash is pinned to the circuit
+  (`test_hash2_matches_circuit_fixture`).
 - Constant-`i` padding is a no-op on state (`inactive_batch_is_noop`) — the basis for the
   privacy mode that hides epoch op-count (see docs/TRUST_MODEL.md §Privacy).
 - Bench emits `results/prover.json`; `compare_to_model.py` emits the comparison table.
@@ -241,10 +247,16 @@ Cost at different scales, and the full significance write-up, are in
   The one new metadata leak — epoch op-count via the step count `i` — is closed by
   **constant-`i` padding** (`--pad-steps` / `WorkloadSpec.pad_to_steps`; no-op soundness proven
   by `inactive_batch_is_noop`). See TRUST_MODEL.md §Privacy.
-- **Governance timelock — implemented.** Verifier upgrades go `proposeDeciderUpgrade` → wait
-  `DECIDER_TIMELOCK` (2 days) → `executeDeciderUpgrade`; `initializeDecider` is a one-time
-  bootstrap (tested by `GovernanceTimelockTest`). PROTOTYPE: single-address governance stands in
-  for a real multisig.
+- **Governance timelock + freeze — implemented.** Verifier upgrades go `proposeDeciderUpgrade` →
+  wait `DECIDER_TIMELOCK` (2 days) → `executeDeciderUpgrade`; `initializeDecider` is a one-time
+  bootstrap; `freezeVerifier()` makes the verifier immutable (tested by `GovernanceTimelockTest`).
+  PROTOTYPE: single-address governance stands in for a real multisig.
+- **Sovereignty & exit — partially implemented.** The **escape hatch** (`exit`) is live: funds
+  can't be trapped — you can always withdraw your proven balance with your own key. What is
+  **not yet** implemented (specified, deferred — see [docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)):
+  a key-indexed tree (unforgeable ownership) and in-circuit user-signed debits (so the operator
+  can't move your balance *before* you exit). Today's boundary: **non-custodial funds with an
+  operator trusted only for liveness.**
 - **Key↔position binding (known gap, #1 for production).** The tree uses dense slots + an
   off-circuit key→slot map and does not enforce `position = f(key)`, so a malicious prover could
   duplicate a key across positions. Masked here (the operator is the trusted prover) but must be
