@@ -22,7 +22,8 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 
 > 📄 **New to IVC / folding schemes or sonobe?** Start with the
 > **[technical report](docs/REPORT.md)** — a self-contained explainer of what this is, what it
-> costs, and why it matters, with diagrams and charts. Security details:
+> costs, and why it matters, with diagrams and charts. Where it fits (and where it doesn't):
+> **[docs/USE_CASES.md](docs/USE_CASES.md)**. Security details:
 > **[docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)**.
 
 ---

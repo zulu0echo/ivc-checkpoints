@@ -273,6 +273,7 @@ hardware. These are enumerated in [TRUST_MODEL.md §6](TRUST_MODEL.md).
 - **Run it:** [README §Quick start](../README.md#quick-start) — circuit tests + measured
   constraints in ~1 min; the full fold→prove→on-chain-verify path on modest hardware via
   `light-test`.
+- **Where it fits (and where it doesn't):** [USE_CASES.md](USE_CASES.md).
 - **Trust & privacy:** [TRUST_MODEL.md](TRUST_MODEL.md).
 - **Reproduce the numbers here:** `results/comparison.md` (measured vs model),
   `results/measured.json`.
