@@ -339,11 +339,19 @@ fn gen_empty_hashes<
 >(
     leaf_hash_params: &<P::LeafHash as CRHScheme>::Parameters,
     two_to_one_hash_params: &<P::TwoToOneHash as TwoToOneCRHScheme>::Parameters,
-    empty_leaf: &P::Leaf,
+    _empty_leaf: &P::Leaf,
     n: usize,
 ) -> Result<Vec<P::InnerDigest>, Error> {
+    // DEVIATION from upstream plasma-blind `sparsemt`: an empty leaf hashes to the field ZERO,
+    // not `LeafHash(default)`. This is REQUIRED for indexed/interval-tree non-membership
+    // soundness (Phase 2b): a real leaf is `LeafHash(preimage) != 0`, so an empty slot can never
+    // be passed off as a `(value, next)` low leaf in an inclusion proof. If empties hashed to
+    // `LeafHash([0..])`, every empty slot would read as a valid `(0, 0)` low and an operator
+    // could register the same key at two indices. `leaf_hash_params` is retained for signature
+    // compatibility; only the two-to-one params drive the (zero-seeded) internal empty hashes.
+    let _ = leaf_hash_params;
     let mut empty_hashes = Vec::with_capacity(n);
-    let mut empty_hash = P::LeafHash::evaluate(leaf_hash_params, empty_leaf)?;
+    let mut empty_hash = F::zero();
     empty_hashes.push(empty_hash);
 
     for _ in 1..=n {

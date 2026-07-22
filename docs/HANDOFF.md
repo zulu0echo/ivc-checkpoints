@@ -1,4 +1,4 @@
-# Handoff — resume state (2026-07-22, Phase 2a complete)
+# Handoff — resume state (2026-07-22, Phase 2b complete)
 
 This file lets a fresh session continue the `ivc-checkpoints` work with no prior context.
 Read this, then `docs/BUILD_PLAN_A0_A1.md`, then the "Immediate next step" below.
@@ -31,7 +31,8 @@ Reuse [plasma-blind](https://github.com/privacy-ethereum/plasma-blind)'s primiti
 | 0 — spike: new-line EVM decider works, gas ≈ 669k (LegoGroth16, trivial circuit) | ✅ done, measured |
 | 1 — port ledger `FCircuit` to new trait; native-vs-circuit agreement test | ✅ done, green (`cargo test -p ledger-circuit-newline`) |
 | 2a — adopt `sparsemt` as base Merkle-map gadget (behaviour-equivalent) | ✅ done — agreement + tamper tests green |
-| **2b — add `IntervalCRH` indexed-tree layer (real A0 key-uniqueness/non-membership)** | **🚧 NEXT — see below** |
+| 2b — unified indexed/interval account tree (real A0 key-uniqueness/non-membership) | ✅ done — register agreement + duplicate-key-rejected tests green |
+| **3 — A1: plasma-blind `schnorr` per-debit in-circuit auth** | **🚧 NEXT — see below** |
 | 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | pending |
 | 4 — decider/EVM re-target (LegoGroth16), regen `DeciderVerifier.sol`, update contracts, re-measure gas | pending — **GATED on sonobe PR #259 merging to `staging`** |
 | 5 — ceremony/audit hardening | pending |
@@ -64,18 +65,41 @@ leaf at `idx + 2^(H-1) - 1`) matches this exactly, and `poseidon::TwoToOneCRH(a,
 `CRH([a,b])`, which is why the swap is behaviour-equivalent. `sparsemt/{mod.rs,constraints.rs}`
 carry two harmless `unused import` warnings inherited from plasma-blind.
 
-## Immediate next step (Phase 2b — real A0)
-Add plasma-blind's **`IntervalCRH` indexed/interval tree** so account keys are provably unique /
-non-duplicable (an assigned-index map alone lets an operator place a key at two indices). This is
-where A0 soundness is actually won. Sources (in the re-cloned plasma-blind, see below):
-- `core/src/primitives/crh/{mod.rs,constraints.rs}` — `IntervalCRH` + `IntervalCRHGadget`, and the
-  `Init` trait (`utils.rs`) that parameterizes Poseidon per arity. NOTE: 2b likely needs the
-  `Init`-based `NTo1CRH` path (or an interval-specific config), unlike 2a which deliberately reused
-  `poseidon_circom_config` directly.
-- `core/src/datastructures/nullifier/mod.rs` — `NullifierTreeConfig` (`Leaf = (F, F)` sorted
-  intervals, `LeafHash = IntervalCRH`): the indexed-tree pattern to mirror for the account tree.
-Design: prove non-membership of a new key via the low interval bracketing it, then insert; key the
-ledger accounts through the interval tree. See BUILD_PLAN_A0_A1.md §"Phase 2 (A0) design note".
+## Phase 2b — DONE (committed on `newline-port`)
+A0 is now enforced in-circuit via a **unified indexed/interval account tree (Design B)** — we did
+*not* use plasma-blind's 2-field `IntervalCRH`; instead the interval pointer rides inside the
+account leaf. What landed in `crates/ledger-circuit-newline`:
+- **Leaf arity 4→5**: `(key, next_key, token, balance, nonce)` (`config.rs`, `LEAF_ARITY = 5`).
+  `next_key` pointers form a sorted linked list; `next_key == 0` means +∞.
+- **Bounded `<` gadget** `enforce_lt_when(a, b, should)` (`KEY_BITS = 160`): strict less-than on
+  bounded operands, neutralised (compares `0 < 1`) when `should` is false so it's safe on padding.
+- **In-circuit REGISTER** (`RegWitness` + a registration loop in `synthesize_step`, run before the
+  transfer loop): (R1) low-leaf inclusion, (R2) non-membership `low_key < key` & (`low_next==0` |
+  `key < low_next`), (R3) split `low.next := key`, (R4) prove the target slot is empty (digest 0)
+  via `root_from_digest`, (R5) insert. `LedgerCircuit::new_with_regs(reg_batch, batch, depth)`.
+- **Native** `EpochExecutor::register_indexed` maintains the sorted intervals (`find_low`, sentinel
+  at slot 0, `tokens`/`next_keys` maps) and emits the witness.
+- **Soundness-critical deviation**: `sparsemt/mod.rs::gen_empty_hashes` now seeds empties with
+  `F::zero()` (not `LeafHash(default)`), so a real leaf `H(preimage) != 0` can never be confused
+  with an empty slot — the fix that makes non-membership sound. See the comment there.
+- Tests (5, all green): `registrations_native_matches_circuit`, `duplicate_key_registration_rejected`
+  (the A0 property), `bounded_lt_gadget`, plus the two Phase-2a tests.
+
+Not yet done in 2b (fine to leave for later / note in report): the R4 anti-clobber check has no
+dedicated negative test; registrations are a fixed `reg_batch` per step; keys are assumed
+`< 2^160`.
+
+## Immediate next step (Phase 3 — A1)
+Add per-debit **authorization** so the operator can't move a balance without the owner's key. Plan
+(hybrid, per BUILD_PLAN §"keep ECDSA, add Schnorr"): the leaf binds an ECDSA owner **and** a
+delegated Poseidon-friendly **Schnorr spend key** (plasma-blind `core/src/primitives/schnorr.rs`,
+over Grumpkin); every debit (the `from` side of a transfer/withdraw) verifies a Schnorr signature
+in-circuit over the op. Sources in the re-cloned plasma-blind:
+- `core/src/primitives/schnorr.rs` — native + gadget Schnorr (verify over Grumpkin + Poseidon).
+- Its `Init`/`NTo1CRH` + Grumpkin (`ark_grumpkin`) usage — Phase 3 will likely need the `Init`
+  path we skipped in 2a/2b, plus `ark_grumpkin` as a dep.
+Design sketch: extend the leaf to also bind the spend pubkey (arity grows again, or fold pubkey
+into `key`), add signature fields to `OpWitness`, and gate the debit on in-circuit verify.
 
 ## Key source locations (plasma-blind — the port source)
 Scratchpad clones live under the **session-specific** dir and are **likely GONE in a new session**.

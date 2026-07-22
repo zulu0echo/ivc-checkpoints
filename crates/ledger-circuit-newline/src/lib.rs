@@ -118,8 +118,52 @@ impl OpWitness {
     }
 }
 
+/// Witness for an in-circuit account registration (indexed-tree non-membership + split-insert).
+#[derive(Clone, Debug)]
+pub struct RegWitness {
+    pub active: bool,
+    pub key: Fr,
+    pub token: Fr,
+    pub balance: Fr,
+    pub nonce: Fr,
+    // The bracketing "low" leaf, as it exists BEFORE the split (`low_next == 0` means +infinity):
+    pub low_key: Fr,
+    pub low_next: Fr,
+    pub low_token: Fr,
+    pub low_balance: Fr,
+    pub low_nonce: Fr,
+    pub low_index_bits: Vec<bool>,
+    pub low_siblings: Vec<Fr>,
+    // The fresh (empty) slot the new leaf is inserted at:
+    pub new_index_bits: Vec<bool>,
+    pub new_siblings: Vec<Fr>,
+}
+
+impl RegWitness {
+    pub fn padding(depth: usize) -> Self {
+        let z = Fr::from(0u64);
+        Self {
+            active: false,
+            key: z,
+            token: z,
+            balance: z,
+            nonce: z,
+            low_key: z,
+            low_next: z,
+            low_token: z,
+            low_balance: z,
+            low_nonce: z,
+            low_index_bits: vec![false; depth],
+            low_siblings: vec![z; depth],
+            new_index_bits: vec![false; depth],
+            new_siblings: vec![z; depth],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EpochStepInput {
+    pub regs: Vec<RegWitness>,
     pub ops: Vec<OpWitness>,
 }
 
@@ -128,13 +172,19 @@ pub struct EpochStepInput {
 #[derive(Clone)]
 pub struct LedgerCircuit {
     pub c: PoseidonConfig<Fr>,
+    pub reg_batch: usize,
     pub batch: usize,
     pub depth: usize,
 }
 
 impl LedgerCircuit {
+    /// `batch` transfer ops, no registrations (Phase 2a compatibility).
     pub fn new(batch: usize, depth: usize) -> Self {
-        Self { c: cfg(), batch, depth }
+        Self { c: cfg(), reg_batch: 0, batch, depth }
+    }
+    /// `reg_batch` registrations followed by `batch` transfer ops.
+    pub fn new_with_regs(reg_batch: usize, batch: usize, depth: usize) -> Self {
+        Self { c: cfg(), reg_batch, batch, depth }
     }
 }
 
@@ -172,6 +222,25 @@ fn enforce_lt_when(
     Ok(())
 }
 
+// Recompute a Merkle root from a leaf **digest** (not a preimage) + siblings + path bits, using
+// the same fold rule as `MerkleSparseTreeGadget::recover_root`. Used to prove a slot holds the
+// empty digest `0` (an empty leaf), which `recover_root` cannot express since it always hashes a
+// preimage. `TwoToOne(l, r) == h_gadget([l, r])` for Poseidon, so this matches the tree's hashing.
+fn root_from_digest(
+    p: &CRHParametersVar<Fr>,
+    leaf_digest: &FpVar<Fr>,
+    bits: &[Boolean<Fr>],
+    sibs: &[FpVar<Fr>],
+) -> Result<FpVar<Fr>, SynthesisError> {
+    let mut hash = leaf_digest.clone();
+    for (sib, bit) in sibs.iter().zip(bits) {
+        let left = bit.select(sib, &hash)?;
+        let right = &hash + sib - &left;
+        hash = h_gadget(p, &[left, right])?;
+    }
+    Ok(hash)
+}
+
 impl FCircuit for LedgerCircuit {
     type Field = Fr;
     type State = [Fr; STATE_LEN];
@@ -188,7 +257,10 @@ impl FCircuit for LedgerCircuit {
     }
 
     fn dummy_external_inputs(&self) -> Self::ExternalInputs {
-        EpochStepInput { ops: (0..self.batch).map(|_| OpWitness::padding(self.depth)).collect() }
+        EpochStepInput {
+            regs: (0..self.reg_batch).map(|_| RegWitness::padding(self.depth)).collect(),
+            ops: (0..self.batch).map(|_| OpWitness::padding(self.depth)).collect(),
+        }
     }
 
     fn synthesize_step(
@@ -197,6 +269,7 @@ impl FCircuit for LedgerCircuit {
         state: Self::StateVar,
         ext: Self::ExternalInputs,
     ) -> Result<(Self::StateVar, Self::ExternalOutputs), SynthesisError> {
+        assert_eq!(ext.regs.len(), self.reg_batch, "reg batch size mismatch");
         assert_eq!(ext.ops.len(), self.batch, "batch size mismatch");
         assert_eq!(self.depth, TREE_H - 1, "depth must equal TREE_H - 1");
         let cs = state[0].cs();
@@ -212,6 +285,68 @@ impl FCircuit for LedgerCircuit {
         let mut state_root = state[0].clone();
         let mut ops_acc = state[1].clone();
         let mut nets_acc = state[2].clone();
+        let zero = FpVar::<Fr>::zero();
+
+        // ---- registrations: indexed-tree non-membership + split-insert ----
+        for reg in ext.regs.iter() {
+            let active = Boolean::new_witness(cs.clone(), || Ok(reg.active))?;
+            let key = FpVar::new_witness(cs.clone(), || Ok(reg.key))?;
+            let token = FpVar::new_witness(cs.clone(), || Ok(reg.token))?;
+            let balance = FpVar::new_witness(cs.clone(), || Ok(reg.balance))?;
+            let nonce = FpVar::new_witness(cs.clone(), || Ok(reg.nonce))?;
+            let low_key = FpVar::new_witness(cs.clone(), || Ok(reg.low_key))?;
+            let low_next = FpVar::new_witness(cs.clone(), || Ok(reg.low_next))?;
+            let low_token = FpVar::new_witness(cs.clone(), || Ok(reg.low_token))?;
+            let low_balance = FpVar::new_witness(cs.clone(), || Ok(reg.low_balance))?;
+            let low_nonce = FpVar::new_witness(cs.clone(), || Ok(reg.low_nonce))?;
+            let mut low_sibs = Vec::with_capacity(self.depth);
+            let mut low_bits = Vec::with_capacity(self.depth);
+            let mut new_sibs = Vec::with_capacity(self.depth);
+            let mut new_bits = Vec::with_capacity(self.depth);
+            for d in 0..self.depth {
+                low_sibs.push(FpVar::new_witness(cs.clone(), || Ok(reg.low_siblings[d]))?);
+                low_bits.push(Boolean::new_witness(cs.clone(), || Ok(reg.low_index_bits[d]))?);
+                new_sibs.push(FpVar::new_witness(cs.clone(), || Ok(reg.new_siblings[d]))?);
+                new_bits.push(Boolean::new_witness(cs.clone(), || Ok(reg.new_index_bits[d]))?);
+            }
+
+            // (R1) the low leaf is included in the current root
+            let low_old_leaf = [
+                low_key.clone(),
+                low_next.clone(),
+                low_token.clone(),
+                low_balance.clone(),
+                low_nonce.clone(),
+            ];
+            let low_old_root = mt.recover_root(&low_old_leaf, &low_bits, &low_sibs)?;
+            low_old_root.conditional_enforce_equal(&state_root, &active)?;
+
+            // (R2) non-membership: low_key < key, and (low_next == 0 [+inf] OR key < low_next)
+            enforce_lt_when(&low_key, &key, &active)?;
+            let low_is_inf = low_next.is_eq(&zero)?;
+            let upper = active.clone() & (!low_is_inf);
+            enforce_lt_when(&key, &low_next, &upper)?;
+
+            // (R3) split the low interval: low.next := key
+            let low_new_leaf = [
+                low_key.clone(),
+                key.clone(),
+                low_token.clone(),
+                low_balance.clone(),
+                low_nonce.clone(),
+            ];
+            let inter_active = mt.recover_root(&low_new_leaf, &low_bits, &low_sibs)?;
+            let inter_root = FpVar::conditionally_select(&active, &inter_active, &state_root)?;
+
+            // (R4) the target slot is empty (digest 0) in the intermediate tree — no clobber
+            let empty_root = root_from_digest(&p, &zero, &new_bits, &new_sibs)?;
+            empty_root.conditional_enforce_equal(&inter_root, &active)?;
+
+            // (R5) insert the new leaf (key, low_next, token, balance, nonce)
+            let new_leaf = [key.clone(), low_next.clone(), token.clone(), balance.clone(), nonce.clone()];
+            let new_root = mt.recover_root(&new_leaf, &new_bits, &new_sibs)?;
+            state_root = FpVar::conditionally_select(&active, &new_root, &inter_root)?;
+        }
 
         for op in ext.ops.iter() {
             // allocate witnesses from the value
@@ -319,6 +454,7 @@ pub struct EpochExecutor {
     slots: HashMap<Vec<u8>, u64>,
     balances: HashMap<Vec<u8>, u128>,
     nonces: HashMap<Vec<u8>, u64>,
+    tokens: HashMap<Vec<u8>, Fr>,
     next_keys: HashMap<Vec<u8>, Fr>,
     next: u64,
     ops_acc: Fr,
@@ -331,23 +467,44 @@ fn key_bytes(k: Fr) -> Vec<u8> {
     k.into_bigint().to_bytes_le()
 }
 
+// Ordering on field elements by canonical representative (valid for KEY_BITS-bounded keys).
+fn fr_lt(a: Fr, b: Fr) -> bool {
+    a.into_bigint() < b.into_bigint()
+}
+
 impl EpochExecutor {
     pub fn new(depth: usize) -> Self {
         assert_eq!(depth, TREE_H - 1, "depth must equal TREE_H - 1");
         let c = cfg();
         let tree = MerkleSparseTree::<LedgerConfig<TREE_H>>::blank(&c, &c);
-        Self {
+        let mut this = Self {
             tree,
             c,
             slots: HashMap::new(),
             balances: HashMap::new(),
             nonces: HashMap::new(),
+            tokens: HashMap::new(),
             next_keys: HashMap::new(),
             next: 0,
             ops_acc: Fr::from(0u64),
             nets_acc: Fr::from(0u64),
             depth,
-        }
+        };
+        // Sentinel leaf at slot 0: (key=0, next=0[+inf], 0, 0, 0). Its hash is LeafHash([0;5]) != 0,
+        // whereas every empty slot hashes to 0 — this is what makes empty slots unusable as `low`
+        // leaves and gives indexed-tree non-membership its soundness. Real accounts start at slot 1.
+        let z = Fr::from(0u64);
+        let zk = key_bytes(z);
+        this.slots.insert(zk.clone(), 0);
+        this.balances.insert(zk.clone(), 0);
+        this.nonces.insert(zk.clone(), 0);
+        this.tokens.insert(zk.clone(), z);
+        this.next_keys.insert(zk, z);
+        this.next = 1;
+        this.tree
+            .update_and_prove(0, &[z, z, z, z, z])
+            .expect("sentinel install");
+        this
     }
     pub fn register(&mut self, key: Fr, token: Fr, bal: u128, nonce: u64) {
         let k = key_bytes(key);
@@ -358,7 +515,8 @@ impl EpochExecutor {
         });
         self.balances.insert(k.clone(), bal);
         self.nonces.insert(k.clone(), nonce);
-        // next_key defaults to 0 here; Phase 2b-3 maintains the real sorted-interval pointer.
+        self.tokens.insert(k.clone(), token);
+        // next_key defaults to 0 here; `register_indexed` maintains the real sorted-interval pointer.
         let next_key = *self.next_keys.entry(k.clone()).or_insert(Fr::from(0u64));
         self.tree
             .update_and_prove(
@@ -366,6 +524,82 @@ impl EpochExecutor {
                 &[key, next_key, token, Fr::from(bal), Fr::from(nonce)],
             )
             .expect("register: tree update");
+    }
+
+    /// Predecessor of `key`: the registered key `L` (including the sentinel 0) with the largest
+    /// `L < key`. In a correctly maintained sorted structure its `next` pointer is `> key` or 0.
+    fn find_low(&self, key: Fr) -> (Fr, u64) {
+        let mut best_key = Fr::from(0u64);
+        let mut best_slot = 0u64; // sentinel
+        for (kb, &slot) in &self.slots {
+            let cand = Fr::from_le_bytes_mod_order(kb);
+            if fr_lt(cand, key) && fr_lt(best_key, cand) {
+                best_key = cand;
+                best_slot = slot;
+            }
+        }
+        (best_key, best_slot)
+    }
+
+    /// In-circuit-style registration: bracket `key` by its predecessor, split the interval, and
+    /// insert the new account at a fresh slot. Returns the witness the circuit re-checks.
+    pub fn register_indexed(&mut self, key: Fr, token: Fr, bal: u128, nonce: u64) -> RegWitness {
+        let k = key_bytes(key);
+        assert!(!self.slots.contains_key(&k), "duplicate key registration");
+        assert!(key != Fr::from(0u64), "key 0 is reserved for the sentinel");
+
+        let (low_key, low_slot) = self.find_low(key);
+        let low_kb = key_bytes(low_key);
+        let low_next = self.next_keys[&low_kb];
+        let low_token = self.tokens[&low_kb];
+        let low_bal = self.balances[&low_kb];
+        let low_nonce = self.nonces[&low_kb];
+
+        let low_bits = index_bits(low_slot, self.depth);
+        let low_sibs = self.tree.siblings(low_slot as usize).expect("low siblings");
+
+        // split: low.next := key
+        self.tree
+            .update_and_prove(
+                low_slot as usize,
+                &[low_key, key, low_token, Fr::from(low_bal), Fr::from(low_nonce)],
+            )
+            .expect("low split update");
+        self.next_keys.insert(low_kb, key);
+
+        // insert new leaf at a fresh (empty) slot
+        let new_slot = self.next;
+        self.next += 1;
+        let new_bits = index_bits(new_slot, self.depth);
+        let new_sibs = self.tree.siblings(new_slot as usize).expect("new siblings");
+        self.tree
+            .update_and_prove(
+                new_slot as usize,
+                &[key, low_next, token, Fr::from(bal), Fr::from(nonce)],
+            )
+            .expect("new insert update");
+        self.slots.insert(k.clone(), new_slot);
+        self.next_keys.insert(k.clone(), low_next);
+        self.tokens.insert(k.clone(), token);
+        self.balances.insert(k.clone(), bal);
+        self.nonces.insert(k.clone(), nonce);
+
+        RegWitness {
+            active: true,
+            key,
+            token,
+            balance: Fr::from(bal),
+            nonce: Fr::from(nonce),
+            low_key,
+            low_next,
+            low_token,
+            low_balance: Fr::from(low_bal),
+            low_nonce: Fr::from(low_nonce),
+            low_index_bits: low_bits,
+            low_siblings: low_sibs,
+            new_index_bits: new_bits,
+            new_siblings: new_sibs,
+        }
     }
     pub fn initial_state(&self) -> [Fr; 3] {
         [self.tree.root(), Fr::from(0u64), Fr::from(0u64)]
@@ -499,7 +733,7 @@ mod tests {
             <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z0)).unwrap();
         let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
         let (z_next, _) = circuit
-            .synthesize_step(i, z_var, EpochStepInput { ops })
+            .synthesize_step(i, z_var, EpochStepInput { regs: vec![], ops })
             .unwrap();
         assert!(cs.is_satisfied().unwrap(), "circuit satisfied");
         let got: Vec<Fr> = z_next.iter().map(|v| v.value().unwrap()).collect();
@@ -531,11 +765,93 @@ mod tests {
             <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z0)).unwrap();
         let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
         let _ = circuit
-            .synthesize_step(i, z_var, EpochStepInput { ops })
+            .synthesize_step(i, z_var, EpochStepInput { regs: vec![], ops })
             .unwrap();
         assert!(
             !cs.is_satisfied().unwrap(),
             "tampered sibling must violate the inclusion constraint"
+        );
+    }
+
+    // Registrations run in-circuit and agree with the native indexed-tree executor.
+    #[test]
+    fn registrations_native_matches_circuit() {
+        let d = config::TREE_H - 1;
+        let token = Fr::from(1u64);
+        let mut exec = EpochExecutor::new(d);
+        let z0 = exec.initial_state();
+
+        // Register three accounts out of key order to exercise interval splitting.
+        let regs = vec![
+            exec.register_indexed(Fr::from(500u64), token, 1_000, 0),
+            exec.register_indexed(Fr::from(2000u64), token, 5, 0),
+            exec.register_indexed(Fr::from(900u64), token, 0, 0),
+        ];
+        let z_expected = exec.state();
+
+        let circuit = LedgerCircuit::new_with_regs(3, 0, d);
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let z_var =
+            <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z0)).unwrap();
+        let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
+        let (z_next, _) = circuit
+            .synthesize_step(i, z_var, EpochStepInput { regs, ops: vec![] })
+            .unwrap();
+        assert!(cs.is_satisfied().unwrap(), "register circuit satisfied");
+        let got: Vec<Fr> = z_next.iter().map(|v| v.value().unwrap()).collect();
+        assert_eq!(got, z_expected.to_vec(), "register z_next == native");
+    }
+
+    // A0 soundness: an operator cannot register the same key twice. The only leaf that could
+    // bracket an already-present key `q` is its predecessor `L`, whose `next` now equals `q`, so
+    // `q < L.next` (i.e. `q < q`) fails — no valid non-membership witness exists.
+    #[test]
+    fn duplicate_key_registration_rejected() {
+        let d = config::TREE_H - 1;
+        let token = Fr::from(1u64);
+        let q = Fr::from(777u64);
+        let mut exec = EpochExecutor::new(d);
+        let _ = exec.register_indexed(q, token, 10, 0);
+        let z1 = exec.state();
+
+        // Craft a malicious second registration of `q`, using its true predecessor (the sentinel
+        // 0, whose next is now q) as the claimed `low`. `key < low_next` => `q < q` must fail.
+        let low_key = Fr::from(0u64);
+        let low_slot = 0u64;
+        let low_next = q; // sentinel's next was set to q by the first registration
+        let low_bits = index_bits(low_slot, d);
+        let low_sibs = exec.tree.siblings(low_slot as usize).unwrap();
+        let new_slot = exec.next; // next fresh slot
+        let new_bits = index_bits(new_slot, d);
+        let new_sibs = exec.tree.siblings(new_slot as usize).unwrap();
+        let malicious = RegWitness {
+            active: true,
+            key: q,
+            token,
+            balance: Fr::from(10u64),
+            nonce: Fr::from(0u64),
+            low_key,
+            low_next,
+            low_token: Fr::from(0u64),
+            low_balance: Fr::from(0u64),
+            low_nonce: Fr::from(0u64),
+            low_index_bits: low_bits,
+            low_siblings: low_sibs,
+            new_index_bits: new_bits,
+            new_siblings: new_sibs,
+        };
+
+        let circuit = LedgerCircuit::new_with_regs(1, 0, d);
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let z_var =
+            <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z1)).unwrap();
+        let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
+        let _ = circuit
+            .synthesize_step(i, z_var, EpochStepInput { regs: vec![malicious], ops: vec![] })
+            .unwrap();
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "duplicate key registration must be rejected (q < q fails)"
         );
     }
 }
