@@ -153,6 +153,15 @@ commit-only checkpoint, no worse.
 - **Operator-side visibility is unchanged** — the custodian sees everything by design; the proof
   adds integrity, not confidentiality from the custodian.
 
+### 5.5 Composing with one-time / unlinkable recipient addresses
+The circuit is agnostic to how an account address was derived, so it composes with schemes that
+use fresh, unlinkable recipient addresses (e.g. ERC-5564 stealth addresses): those provide
+recipient unlinkability off-chain, while the proof keeps identities/amounts in the witness and
+adds no on-chain linkage (accumulators are hashes of high-entropy keys). The impact is
+**operational, not cryptographic** — one-time addresses force real lazy leaf insertion
+(production requirement #1, §6) and tree-capacity planning; they do not change what the proof
+reveals or the trust assumptions above.
+
 ---
 
 ## 6. Known limitations & production requirements

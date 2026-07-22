@@ -236,6 +236,26 @@ the piece flagged for optimization before scaling the payee set.**
   verifier, and a real proof — including the awkward integration details (Poseidon match, calldata
   layout, EVM verification) that estimates gloss over.
 
+### Composing with one-time / unlinkable recipient addresses
+The circuit keys leaves by `keccak256(address ‖ tokenId)`, so it is **agnostic to how an address
+was derived** — an ordinary account and a fresh, one-time, unlinkable address (e.g. an
+[ERC-5564](https://eips.ethereum.org/EIPS/eip-5564) stealth address) are both just inputs to that
+hash. Two implications:
+
+- **They compose cleanly.** Unlinkable addresses provide recipient (*who*) privacy off-chain; the
+  proof independently keeps every account identity, balance, and amount in the prover's witness
+  (never on-chain) and publishes only roots, accumulators, and per-payee settlement amounts. The
+  proof adds **no** linkage — the public accumulators are Poseidon hashes of high-entropy keys —
+  and the one metadata leak (op count via `i`) is independent of it and closed by constant-`i`
+  padding. (Amounts still aren't confidential; that needs a shielded pool.)
+- **They make lazy account insertion mandatory.** One-time addresses are fresh per payment, so the
+  ledger sees a continuous stream of new keys rather than a fixed account set. The prototype
+  *pre-registers* accounts; a real deployment must insert new leaves on the fly (prove the slot is
+  empty, then insert) — the key-indexed *indexed Merkle tree* of production requirement #1 — and
+  must size or rotate the depth-22 (~4.2M-leaf) tree for one-time-address churn. This is an
+  account-lifecycle concern, **not** a change to the proving pipeline: correctness, verifier gas,
+  calldata, and the trust model are unaffected.
+
 ### Honest scope
 This is a **prototype**, and its usefulness is **specific**: it strengthens the *integrity* of an
 **operator-custodied** off-chain balance ledger. It does **not** make amounts confidential (payee
