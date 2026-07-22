@@ -31,18 +31,28 @@ branch, a **parallel track** to `main` (which holds the working classic prototyp
   (`KEY_BITS = 160`). **Soundness note:** empty leaves hash to `0` (a deliberate deviation from
   upstream `sparsemt`, documented in [`src/sparsemt/mod.rs`](src/sparsemt/mod.rs)) so an empty slot
   can never be passed off as a `(0, 0)` low leaf.
-- `cargo test -p ledger-circuit-newline` (5 tests):
-  - `single_batch_native_matches_circuit` — transfer batch: circuit state **bit-identical to native**.
+- **Phase 3 (A1):** every **debit** carries a **Schnorr signature** (plasma-blind's gadget, over
+  Grumpkin — whose base field is BN254 `Fr`, so verification runs in the ledger's own field) by the
+  account's delegated spend key. The leaf's 6th field `pk_hash = Poseidon(pk.x, pk.y)` commits the
+  spend pubkey; in `synthesize_step` the witnessed pubkey is checked against it and
+  `SchnorrGadget::verify` runs over the debit message `(from, to, token, amount, nonce)`. The
+  account identifier `key` is the Ethereum (ECDSA) owner used for on-chain exit; the Schnorr key is
+  the delegated in-circuit spend key (hybrid). Signatures are always present (padding ops carry a
+  valid dummy), so verify is unconditional; **~5,136 constraints per signature [M]**.
+- `cargo test -p ledger-circuit-newline` (6 lib + 2 schnorr = 8 tests):
+  - `single_batch_native_matches_circuit` — signed transfer batch: circuit state **bit-identical to native**.
   - `tampered_sibling_breaks_inclusion` — corrupting a sibling makes the CS **unsatisfiable**.
-  - `bounded_lt_gadget` — the conditional bounded `<` gadget (active enforces strict `<`; inactive neutralised).
+  - `bounded_lt_gadget` — the conditional bounded `<` gadget.
   - `registrations_native_matches_circuit` — in-circuit registrations (with interval splitting) **match native**.
-  - `duplicate_key_registration_rejected` — **A0**: a crafted duplicate registration is rejected (`q < q` fails).
+  - `duplicate_key_registration_rejected` — **A0**: a crafted duplicate registration is rejected.
+  - `bad_signature_rejected` — **A1**: a debit with an invalid spend-key signature is rejected.
 
 ## Status / next (see BUILD_PLAN_A0_A1.md)
-- **Phase 1 / 2a / 2b (this crate): done.** A0 (no account forgery/duplication) is enforced in-circuit.
-- Phase 3 — A1: add plasma-blind `schnorr` per-debit auth (ECDSA owner + delegated spend key), so
-  the operator can't move a balance without the owner's key.
-- Phase 4 — decider/EVM re-target, **gated on PR #259 merging to `staging`**.
+- **Phases 1 / 2a / 2b / 3 (this crate): done. Full non-custody (A0 + A1) is enforced in-circuit** —
+  the operator can neither forge/duplicate an account (A0) nor move a balance without the account's
+  spend key (A1).
+- Phase 4 — decider/EVM re-target + `ProvenCheckpoint` wiring, **gated on PR #259 merging to `staging`**.
+- Phase 5 — ceremony / audit hardening.
 
 ## Caveats
 - The pinned sonobe rev is a **draft branch** (`revamp/decider`); re-pin to `staging` once the

@@ -1,8 +1,9 @@
 //! Poseidon-backed `merkle_tree::Config` + `ConfigGadget` for the ledger account tree,
 //! wired for plasma-blind's `sparsemt` (`MerkleSparseTree` + `MerkleSparseTreeGadget`).
 //!
-//! The account leaf is the 5-tuple `(key, next_key, tokenId, balance, nonce)` — the interval
-//! pointer `next_key` (Design B, indexed Merkle tree) rides alongside the account payload. We need a **sized**
+//! The account leaf is the 6-tuple `(key, next_key, tokenId, balance, nonce, pk_hash)` — the
+//! interval pointer `next_key` (Design B, indexed Merkle tree) and the delegated Schnorr spend-key
+//! commitment `pk_hash` (A1) ride alongside the account payload. We need a **sized**
 //! leaf so the native side satisfies `SparseConfig: Config<Leaf: Default>` and the gadget
 //! side satisfies `ConfigGadget::LeafHash: CRHSchemeGadget<_, InputVar = Self::Leaf>` with a
 //! `Sized` leaf. arkworks' stock `poseidon::CRH` has `Input = [F]` (unsized), so — exactly as
@@ -34,8 +35,8 @@ use sonobe_primitives::transcripts::poseidon::poseidon_circom_config;
 
 use crate::sparsemt::{constraints::SparseConfigGadget, SparseConfig};
 
-/// Number of field elements in an account leaf: (key, next_key, tokenId, balance, nonce).
-pub const LEAF_ARITY: usize = 5;
+/// Number of field elements in an account leaf: (key, next_key, tokenId, balance, nonce, pk_hash).
+pub const LEAF_ARITY: usize = 6;
 
 /// Tree height (number of levels including the leaf level). Merkle depth = `TREE_H - 1`.
 /// Kept small for fast constraint-satisfaction tests; production would raise this (e.g. 23 for

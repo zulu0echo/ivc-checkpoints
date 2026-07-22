@@ -1,4 +1,4 @@
-# Handoff — resume state (2026-07-22, Phase 2b complete)
+# Handoff — resume state (2026-07-22, Phase 3 complete — full non-custody A0+A1)
 
 This file lets a fresh session continue the `ivc-checkpoints` work with no prior context.
 Read this, then `docs/BUILD_PLAN_A0_A1.md`, then the "Immediate next step" below.
@@ -32,7 +32,8 @@ Reuse [plasma-blind](https://github.com/privacy-ethereum/plasma-blind)'s primiti
 | 1 — port ledger `FCircuit` to new trait; native-vs-circuit agreement test | ✅ done, green (`cargo test -p ledger-circuit-newline`) |
 | 2a — adopt `sparsemt` as base Merkle-map gadget (behaviour-equivalent) | ✅ done — agreement + tamper tests green |
 | 2b — unified indexed/interval account tree (real A0 key-uniqueness/non-membership) | ✅ done — register agreement + duplicate-key-rejected tests green |
-| **3 — A1: plasma-blind `schnorr` per-debit in-circuit auth** | **🚧 NEXT — see below** |
+| 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | ✅ done — bad-signature-rejected test green; ~5,136 constraints/verify |
+| **4 — decider/EVM re-target + `ProvenCheckpoint` wiring** | **🚧 NEXT — GATED on sonobe PR #259 merging to `staging`** |
 | 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | pending |
 | 4 — decider/EVM re-target (LegoGroth16), regen `DeciderVerifier.sol`, update contracts, re-measure gas | pending — **GATED on sonobe PR #259 merging to `staging`** |
 | 5 — ceremony/audit hardening | pending |
@@ -89,17 +90,38 @@ Not yet done in 2b (fine to leave for later / note in report): the R4 anti-clobb
 dedicated negative test; registrations are a fixed `reg_batch` per step; keys are assumed
 `< 2^160`.
 
-## Immediate next step (Phase 3 — A1)
-Add per-debit **authorization** so the operator can't move a balance without the owner's key. Plan
-(hybrid, per BUILD_PLAN §"keep ECDSA, add Schnorr"): the leaf binds an ECDSA owner **and** a
-delegated Poseidon-friendly **Schnorr spend key** (plasma-blind `core/src/primitives/schnorr.rs`,
-over Grumpkin); every debit (the `from` side of a transfer/withdraw) verifies a Schnorr signature
-in-circuit over the op. Sources in the re-cloned plasma-blind:
-- `core/src/primitives/schnorr.rs` — native + gadget Schnorr (verify over Grumpkin + Poseidon).
-- Its `Init`/`NTo1CRH` + Grumpkin (`ark_grumpkin`) usage — Phase 3 will likely need the `Init`
-  path we skipped in 2a/2b, plus `ark_grumpkin` as a dep.
-Design sketch: extend the leaf to also bind the spend pubkey (arity grows again, or fold pubkey
-into `key`), add signature fields to `OpWitness`, and gate the debit on in-circuit verify.
+## Phase 3 — DONE (committed on `newline-port`)
+A1 is enforced in-circuit: every debit needs a Schnorr signature by the account's leaf-bound spend
+key. What landed:
+- `crates/ledger-circuit-newline/src/schnorr.rs` — plasma-blind's Schnorr (native + gadget) over
+  Grumpkin; `ark-grumpkin`/`ark-ec` deps. Grumpkin base field = BN254 `Fr` → verify runs in-circuit.
+- Leaf arity 5→6: `+ pk_hash = Poseidon(pk.x, pk.y)`. `key` = ECDSA owner (on-chain exit); `pk_hash`
+  = delegated Schnorr spend key (hybrid). `OpWitness` gained `from_pk` (GVar point), `from_sig`
+  `(s, e)` (Grumpkin scalars), `from_pk_hash`, `to_pk_hash`; `RegWitness` gained `pk_hash`,
+  `low_pk_hash`. Native `EpochExecutor` holds a seeded RNG + `spend_sk`/`spend_pk`/`pk_hashes` maps,
+  `assign_spend_key`, and signs each debit in `apply`.
+- In `synthesize_step`, the transfer loop derives `pk_hash` from the witnessed `from_pk`
+  (`to_constraint_field` → pop flag → `h_gadget([x,y])`), binds it to the leaf (conditional on
+  active), and runs `SchnorrGadget::verify::<SIG_WINDOW=32>` over `(from,to,token,amount,nonce)`.
+  Verify is **unconditional** — padding ops carry a valid dummy signature (`dummy_sig`, seeded).
+- Tests (8 total): `bad_signature_rejected` (A1) + `duplicate_key_registration_rejected` (A0) + the
+  agreement/gadget tests + 2 ported schnorr tests. `~5,136 constraints per in-circuit verify`.
+
+**Full non-custody (A0 + A1) is now enforced in the folding circuit.** The classic `main` prototype
+remains the on-chain reference until Phase 4 lands.
+
+## Immediate next step (Phase 4 — decider/EVM) — GATED
+Re-target the prover to the new-line **LegoGroth16 decider**, regenerate `DeciderVerifier.sol`, and
+wire `ProvenCheckpoint` (verify entrypoint + digest + the exit path's on-chain leaf/Merkle hashing,
+now arity-6 + interval + pk_hash), then re-measure gas at `z_len = 3`. **Do not start until sonobe
+PR #259 merges to `staging`** — the decider is on the moving `revamp/decider` branch
+(`sonobe-primitives` rev `243391e`). Also reconcile the rev with plasma-blind's `dmpierre/sonobe@8269ea4`.
+Until then, the circuit work (Phases 1–3) is complete and testable without the decider.
+
+Known follow-ups to fold into Phase 4/5 (from earlier notes): R4 anti-clobber has no dedicated
+negative test; fixed `reg_batch`/`batch` per step; keys assumed `< 2^160`; the empty-leaf-=0
+deviation from audited `sparsemt` must be in the audit scope; on-chain Poseidon (PoseidonT5) must be
+re-derived for `poseidon_circom_config` and extended to the arity-6 leaf.
 
 ## Key source locations (plasma-blind — the port source)
 Scratchpad clones live under the **session-specific** dir and are **likely GONE in a new session**.

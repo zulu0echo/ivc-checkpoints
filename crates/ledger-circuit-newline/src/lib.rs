@@ -18,11 +18,14 @@ use ark_crypto_primitives::{
     },
     sponge::poseidon::PoseidonConfig,
 };
-use ark_ff::PrimeField;
+use ark_bn254::Fq as GrScalar; // Grumpkin scalar field == BN254 base field
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::{BigInteger, PrimeField};
+use ark_grumpkin::{constraints::GVar, Projective as GrProjective};
 use ark_r1cs_std::{
     alloc::AllocVar,
     boolean::Boolean,
-    convert::ToBitsGadget,
+    convert::{ToBitsGadget, ToConstraintFieldGadget},
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
     select::CondSelectGadget,
@@ -37,7 +40,11 @@ pub mod schnorr;
 pub mod sparsemt;
 
 use crate::config::{LedgerConfig, LedgerConfigGadget, TREE_H};
+use crate::schnorr::{Schnorr, SchnorrGadget};
 use crate::sparsemt::{constraints::MerkleSparseTreeGadget, MerkleSparseTree};
+
+/// Window size for the Schnorr `enforce_lt` sub-gadget (matches plasma-blind).
+pub const SIG_WINDOW: usize = 32;
 
 pub const STATE_LEN: usize = 3;
 pub const VALUE_BITS: usize = 96;
@@ -63,6 +70,28 @@ fn h_gadget(p: &CRHParametersVar<Fr>, input: &[FpVar<Fr>]) -> Result<FpVar<Fr>, 
     CRHGadget::<Fr>::evaluate(p, input)
 }
 
+// ---- Schnorr spend-key helpers ----
+
+// Commitment to a Grumpkin spend pubkey stored in the account leaf: Poseidon(x, y) of its affine
+// coordinates. Must match the in-circuit derivation `h_gadget([pk.x, pk.y])`.
+fn pk_hash_native(c: &PoseidonConfig<Fr>, pk: &GrProjective) -> Fr {
+    let (x, y) = pk.into_affine().xy().unwrap_or_default();
+    h2n(c, x, y)
+}
+
+// Little-endian bit decomposition of a Grumpkin scalar, truncated to the scalar modulus size —
+// the wire format `SchnorrGadget::verify` expects for `s` and `e`.
+fn scalar_bits(s: GrScalar) -> Vec<bool> {
+    let mut bits = s.into_bigint().to_bits_le();
+    bits.truncate(GrScalar::MODULUS_BIT_SIZE as usize);
+    bits
+}
+
+// The message a debit signature covers: (from_key, to_key, token, amount, nonce).
+fn debit_message(from: Fr, to: Fr, token: Fr, amount: Fr, nonce: Fr) -> [Fr; 5] {
+    [from, to, token, amount, nonce]
+}
+
 // ============================ tree index bits ============================
 
 // LSB-first path bits for a leaf at assigned position `index` in a `depth`-level tree.
@@ -86,37 +115,61 @@ pub struct OpWitness {
     pub from_next_key: Fr,
     pub from_old_balance: Fr,
     pub from_old_nonce: Fr,
+    pub from_pk_hash: Fr,
     pub from_index_bits: Vec<bool>,
     pub from_siblings: Vec<Fr>,
     pub to_next_key: Fr,
     pub to_old_balance: Fr,
     pub to_old_nonce: Fr,
+    pub to_pk_hash: Fr,
     pub to_index_bits: Vec<bool>,
     pub to_siblings: Vec<Fr>,
+    // A1: the `from` account's delegated Schnorr spend pubkey + its signature over the debit.
+    pub from_pk: GrProjective,
+    pub from_sig: (GrScalar, GrScalar),
 }
 
 impl OpWitness {
-    pub fn padding(depth: usize) -> Self {
+    /// A padding op carries a *valid* dummy signature (over the all-zero debit message by a fixed
+    /// dummy key) so the always-on in-circuit signature check is satisfied; `active = false` keeps
+    /// it from touching the tree state.
+    pub fn padding(c: &PoseidonConfig<Fr>, depth: usize) -> Self {
+        let z = Fr::from(0u64);
+        let (pk, sig) = dummy_sig(c, [z, z, z, z, z]);
         Self {
             active: false,
             kind: 0,
-            from_key: Fr::from(0u64),
-            to_key: Fr::from(0u64),
-            token_id: Fr::from(0u64),
-            amount: Fr::from(0u64),
-            nonce: Fr::from(0u64),
-            from_next_key: Fr::from(0u64),
-            from_old_balance: Fr::from(0u64),
-            from_old_nonce: Fr::from(0u64),
+            from_key: z,
+            to_key: z,
+            token_id: z,
+            amount: z,
+            nonce: z,
+            from_next_key: z,
+            from_old_balance: z,
+            from_old_nonce: z,
+            from_pk_hash: z,
             from_index_bits: vec![false; depth],
-            from_siblings: vec![Fr::from(0u64); depth],
-            to_next_key: Fr::from(0u64),
-            to_old_balance: Fr::from(0u64),
-            to_old_nonce: Fr::from(0u64),
+            from_siblings: vec![z; depth],
+            to_next_key: z,
+            to_old_balance: z,
+            to_old_nonce: z,
+            to_pk_hash: z,
             to_index_bits: vec![false; depth],
-            to_siblings: vec![Fr::from(0u64); depth],
+            to_siblings: vec![z; depth],
+            from_pk: pk,
+            from_sig: sig,
         }
     }
+}
+
+// A fixed dummy keypair + a valid signature over `msg`, used to fill padding ops so the
+// always-on signature check passes on inactive slots. Deterministic (seeded RNG).
+fn dummy_sig(c: &PoseidonConfig<Fr>, msg: [Fr; 5]) -> (GrProjective, (GrScalar, GrScalar)) {
+    use ark_std::rand::SeedableRng;
+    let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(0xD00D);
+    let (sk, pk) = Schnorr::key_gen::<GrProjective>(&mut rng);
+    let sig = Schnorr::sign::<GrProjective>(c, sk, &msg, &mut rng).expect("dummy sign");
+    (pk, sig)
 }
 
 /// Witness for an in-circuit account registration (indexed-tree non-membership + split-insert).
@@ -127,12 +180,14 @@ pub struct RegWitness {
     pub token: Fr,
     pub balance: Fr,
     pub nonce: Fr,
+    pub pk_hash: Fr, // spend-key commitment for the new account (A1)
     // The bracketing "low" leaf, as it exists BEFORE the split (`low_next == 0` means +infinity):
     pub low_key: Fr,
     pub low_next: Fr,
     pub low_token: Fr,
     pub low_balance: Fr,
     pub low_nonce: Fr,
+    pub low_pk_hash: Fr,
     pub low_index_bits: Vec<bool>,
     pub low_siblings: Vec<Fr>,
     // The fresh (empty) slot the new leaf is inserted at:
@@ -149,11 +204,13 @@ impl RegWitness {
             token: z,
             balance: z,
             nonce: z,
+            pk_hash: z,
             low_key: z,
             low_next: z,
             low_token: z,
             low_balance: z,
             low_nonce: z,
+            low_pk_hash: z,
             low_index_bits: vec![false; depth],
             low_siblings: vec![z; depth],
             new_index_bits: vec![false; depth],
@@ -260,7 +317,7 @@ impl FCircuit for LedgerCircuit {
     fn dummy_external_inputs(&self) -> Self::ExternalInputs {
         EpochStepInput {
             regs: (0..self.reg_batch).map(|_| RegWitness::padding(self.depth)).collect(),
-            ops: (0..self.batch).map(|_| OpWitness::padding(self.depth)).collect(),
+            ops: (0..self.batch).map(|_| OpWitness::padding(&self.c, self.depth)).collect(),
         }
     }
 
@@ -300,6 +357,8 @@ impl FCircuit for LedgerCircuit {
             let low_token = FpVar::new_witness(cs.clone(), || Ok(reg.low_token))?;
             let low_balance = FpVar::new_witness(cs.clone(), || Ok(reg.low_balance))?;
             let low_nonce = FpVar::new_witness(cs.clone(), || Ok(reg.low_nonce))?;
+            let pk_hash = FpVar::new_witness(cs.clone(), || Ok(reg.pk_hash))?;
+            let low_pk_hash = FpVar::new_witness(cs.clone(), || Ok(reg.low_pk_hash))?;
             let mut low_sibs = Vec::with_capacity(self.depth);
             let mut low_bits = Vec::with_capacity(self.depth);
             let mut new_sibs = Vec::with_capacity(self.depth);
@@ -318,6 +377,7 @@ impl FCircuit for LedgerCircuit {
                 low_token.clone(),
                 low_balance.clone(),
                 low_nonce.clone(),
+                low_pk_hash.clone(),
             ];
             let low_old_root = mt.recover_root(&low_old_leaf, &low_bits, &low_sibs)?;
             low_old_root.conditional_enforce_equal(&state_root, &active)?;
@@ -328,13 +388,14 @@ impl FCircuit for LedgerCircuit {
             let upper = active.clone() & (!low_is_inf);
             enforce_lt_when(&key, &low_next, &upper)?;
 
-            // (R3) split the low interval: low.next := key
+            // (R3) split the low interval: low.next := key (low's pk_hash unchanged)
             let low_new_leaf = [
                 low_key.clone(),
                 key.clone(),
                 low_token.clone(),
                 low_balance.clone(),
                 low_nonce.clone(),
+                low_pk_hash.clone(),
             ];
             let inter_active = mt.recover_root(&low_new_leaf, &low_bits, &low_sibs)?;
             let inter_root = FpVar::conditionally_select(&active, &inter_active, &state_root)?;
@@ -343,8 +404,15 @@ impl FCircuit for LedgerCircuit {
             let empty_root = root_from_digest(&p, &zero, &new_bits, &new_sibs)?;
             empty_root.conditional_enforce_equal(&inter_root, &active)?;
 
-            // (R5) insert the new leaf (key, low_next, token, balance, nonce)
-            let new_leaf = [key.clone(), low_next.clone(), token.clone(), balance.clone(), nonce.clone()];
+            // (R5) insert the new leaf (key, low_next, token, balance, nonce, pk_hash)
+            let new_leaf = [
+                key.clone(),
+                low_next.clone(),
+                token.clone(),
+                balance.clone(),
+                nonce.clone(),
+                pk_hash.clone(),
+            ];
             let new_root = mt.recover_root(&new_leaf, &new_bits, &new_sibs)?;
             state_root = FpVar::conditionally_select(&active, &new_root, &inter_root)?;
         }
@@ -361,9 +429,15 @@ impl FCircuit for LedgerCircuit {
             let from_next_key = FpVar::new_witness(cs.clone(), || Ok(op.from_next_key))?;
             let from_old_balance = FpVar::new_witness(cs.clone(), || Ok(op.from_old_balance))?;
             let from_old_nonce = FpVar::new_witness(cs.clone(), || Ok(op.from_old_nonce))?;
+            let from_pk_hash = FpVar::new_witness(cs.clone(), || Ok(op.from_pk_hash))?;
             let to_next_key = FpVar::new_witness(cs.clone(), || Ok(op.to_next_key))?;
             let to_old_balance = FpVar::new_witness(cs.clone(), || Ok(op.to_old_balance))?;
             let to_old_nonce = FpVar::new_witness(cs.clone(), || Ok(op.to_old_nonce))?;
+            let to_pk_hash = FpVar::new_witness(cs.clone(), || Ok(op.to_pk_hash))?;
+            // A1: spend pubkey + signature over the debit
+            let from_pk = GVar::new_witness(cs.clone(), || Ok(op.from_pk))?;
+            let s_bits = Vec::<Boolean<Fr>>::new_witness(cs.clone(), || Ok(scalar_bits(op.from_sig.0)))?;
+            let e_bits = Vec::<Boolean<Fr>>::new_witness(cs.clone(), || Ok(scalar_bits(op.from_sig.1)))?;
             let mut from_sibs = Vec::with_capacity(self.depth);
             let mut from_bits = Vec::with_capacity(self.depth);
             let mut to_sibs = Vec::with_capacity(self.depth);
@@ -382,9 +456,31 @@ impl FCircuit for LedgerCircuit {
                 token_id.clone(),
                 from_old_balance.clone(),
                 from_old_nonce.clone(),
+                from_pk_hash.clone(),
             ];
             let from_old_root = mt.recover_root(&from_old_leaf, &from_bits, &from_sibs)?;
             from_old_root.conditional_enforce_equal(&state_root, &active)?;
+
+            // (1b) A1 authorization: the witnessed spend pubkey must match the leaf commitment,
+            // and it must have signed this debit. `pk_hash = Poseidon(pk.x, pk.y)`.
+            let mut pk_xy = from_pk.to_constraint_field()?;
+            pk_xy.pop(); // drop the infinity flag; keep [x, y]
+            let derived_pk_hash = h_gadget(&p, &pk_xy)?;
+            derived_pk_hash.conditional_enforce_equal(&from_pk_hash, &active)?;
+            let msg = [
+                from_key.clone(),
+                to_key.clone(),
+                token_id.clone(),
+                amount.clone(),
+                nonce.clone(),
+            ];
+            // Signatures are always present (padding carries a valid dummy), so verify is uncond.
+            SchnorrGadget::verify::<SIG_WINDOW, GrProjective, GVar>(
+                &p,
+                &from_pk,
+                &msg,
+                (s_bits.clone(), e_bits.clone()),
+            )?;
 
             // (2) solvency + 96-bit range
             enforce_bit_width(&amount, VALUE_BITS)?;
@@ -403,6 +499,7 @@ impl FCircuit for LedgerCircuit {
                 token_id.clone(),
                 from_new_balance.clone(),
                 from_new_nonce,
+                from_pk_hash.clone(),
             ];
             let inter_active = mt.recover_root(&from_new_leaf, &from_bits, &from_sibs)?;
             let inter_root = FpVar::conditionally_select(&active, &inter_active, &state_root)?;
@@ -414,6 +511,7 @@ impl FCircuit for LedgerCircuit {
                 token_id.clone(),
                 to_old_balance.clone(),
                 to_old_nonce.clone(),
+                to_pk_hash.clone(),
             ];
             let to_old_root = mt.recover_root(&to_old_leaf, &to_bits, &to_sibs)?;
             to_old_root.conditional_enforce_equal(&inter_root, &active)?;
@@ -427,6 +525,7 @@ impl FCircuit for LedgerCircuit {
                 token_id.clone(),
                 to_new_balance,
                 to_old_nonce.clone(),
+                to_pk_hash.clone(),
             ];
             let new_active = mt.recover_root(&to_new_leaf, &to_bits, &to_sibs)?;
             state_root = FpVar::conditionally_select(&active, &new_active, &inter_root)?;
@@ -457,6 +556,11 @@ pub struct EpochExecutor {
     nonces: HashMap<Vec<u8>, u64>,
     tokens: HashMap<Vec<u8>, Fr>,
     next_keys: HashMap<Vec<u8>, Fr>,
+    // A1: each account's delegated Schnorr spend keypair + its leaf commitment.
+    spend_sk: HashMap<Vec<u8>, GrScalar>,
+    spend_pk: HashMap<Vec<u8>, GrProjective>,
+    pk_hashes: HashMap<Vec<u8>, Fr>,
+    rng: ark_std::rand::rngs::StdRng,
     next: u64,
     ops_acc: Fr,
     nets_acc: Fr,
@@ -476,6 +580,7 @@ fn fr_lt(a: Fr, b: Fr) -> bool {
 impl EpochExecutor {
     pub fn new(depth: usize) -> Self {
         assert_eq!(depth, TREE_H - 1, "depth must equal TREE_H - 1");
+        use ark_std::rand::SeedableRng;
         let c = cfg();
         let tree = MerkleSparseTree::<LedgerConfig<TREE_H>>::blank(&c, &c);
         let mut this = Self {
@@ -486,12 +591,16 @@ impl EpochExecutor {
             nonces: HashMap::new(),
             tokens: HashMap::new(),
             next_keys: HashMap::new(),
+            spend_sk: HashMap::new(),
+            spend_pk: HashMap::new(),
+            pk_hashes: HashMap::new(),
+            rng: ark_std::rand::rngs::StdRng::seed_from_u64(0xC0FFEE),
             next: 0,
             ops_acc: Fr::from(0u64),
             nets_acc: Fr::from(0u64),
             depth,
         };
-        // Sentinel leaf at slot 0: (key=0, next=0[+inf], 0, 0, 0). Its hash is LeafHash([0;5]) != 0,
+        // Sentinel leaf at slot 0: (0, 0[+inf], 0, 0, 0, 0). Its hash is LeafHash([0;6]) != 0,
         // whereas every empty slot hashes to 0 — this is what makes empty slots unusable as `low`
         // leaves and gives indexed-tree non-membership its soundness. Real accounts start at slot 1.
         let z = Fr::from(0u64);
@@ -500,13 +609,25 @@ impl EpochExecutor {
         this.balances.insert(zk.clone(), 0);
         this.nonces.insert(zk.clone(), 0);
         this.tokens.insert(zk.clone(), z);
-        this.next_keys.insert(zk, z);
+        this.next_keys.insert(zk.clone(), z);
+        this.pk_hashes.insert(zk, z);
         this.next = 1;
         this.tree
-            .update_and_prove(0, &[z, z, z, z, z])
+            .update_and_prove(0, &[z, z, z, z, z, z])
             .expect("sentinel install");
         this
     }
+
+    // Generate a fresh spend keypair for `key` and store it + its leaf commitment. Returns pk_hash.
+    fn assign_spend_key(&mut self, kb: &[u8]) -> Fr {
+        let (sk, pk) = Schnorr::key_gen::<GrProjective>(&mut self.rng);
+        let pk_hash = pk_hash_native(&self.c, &pk);
+        self.spend_sk.insert(kb.to_vec(), sk);
+        self.spend_pk.insert(kb.to_vec(), pk);
+        self.pk_hashes.insert(kb.to_vec(), pk_hash);
+        pk_hash
+    }
+
     pub fn register(&mut self, key: Fr, token: Fr, bal: u128, nonce: u64) {
         let k = key_bytes(key);
         let slot = *self.slots.entry(k.clone()).or_insert_with(|| {
@@ -517,12 +638,13 @@ impl EpochExecutor {
         self.balances.insert(k.clone(), bal);
         self.nonces.insert(k.clone(), nonce);
         self.tokens.insert(k.clone(), token);
+        let pk_hash = self.assign_spend_key(&k);
         // next_key defaults to 0 here; `register_indexed` maintains the real sorted-interval pointer.
         let next_key = *self.next_keys.entry(k.clone()).or_insert(Fr::from(0u64));
         self.tree
             .update_and_prove(
                 slot as usize,
-                &[key, next_key, token, Fr::from(bal), Fr::from(nonce)],
+                &[key, next_key, token, Fr::from(bal), Fr::from(nonce), pk_hash],
             )
             .expect("register: tree update");
     }
@@ -555,18 +677,22 @@ impl EpochExecutor {
         let low_token = self.tokens[&low_kb];
         let low_bal = self.balances[&low_kb];
         let low_nonce = self.nonces[&low_kb];
+        let low_pk_hash = self.pk_hashes[&low_kb];
 
         let low_bits = index_bits(low_slot, self.depth);
         let low_sibs = self.tree.siblings(low_slot as usize).expect("low siblings");
 
-        // split: low.next := key
+        // split: low.next := key (low's payload incl. pk_hash unchanged)
         self.tree
             .update_and_prove(
                 low_slot as usize,
-                &[low_key, key, low_token, Fr::from(low_bal), Fr::from(low_nonce)],
+                &[low_key, key, low_token, Fr::from(low_bal), Fr::from(low_nonce), low_pk_hash],
             )
             .expect("low split update");
         self.next_keys.insert(low_kb, key);
+
+        // fresh spend key for the new account
+        let pk_hash = self.assign_spend_key(&k);
 
         // insert new leaf at a fresh (empty) slot
         let new_slot = self.next;
@@ -576,7 +702,7 @@ impl EpochExecutor {
         self.tree
             .update_and_prove(
                 new_slot as usize,
-                &[key, low_next, token, Fr::from(bal), Fr::from(nonce)],
+                &[key, low_next, token, Fr::from(bal), Fr::from(nonce), pk_hash],
             )
             .expect("new insert update");
         self.slots.insert(k.clone(), new_slot);
@@ -591,11 +717,13 @@ impl EpochExecutor {
             token,
             balance: Fr::from(bal),
             nonce: Fr::from(nonce),
+            pk_hash,
             low_key,
             low_next,
             low_token,
             low_balance: Fr::from(low_bal),
             low_nonce: Fr::from(low_nonce),
+            low_pk_hash,
             low_index_bits: low_bits,
             low_siblings: low_sibs,
             new_index_bits: new_bits,
@@ -615,9 +743,16 @@ impl EpochExecutor {
         let fslot = self.slots[&fk];
         let tslot = self.slots[&tk];
         assert!(fbal >= amount, "insufficient");
+        let fnext = *self.next_keys.get(&fk).unwrap_or(&Fr::from(0u64));
+        let from_pk_hash = self.pk_hashes[&fk];
+        let from_pk = self.spend_pk[&fk];
+        let from_sk = self.spend_sk[&fk];
+        // A1: sign the debit (from, to, token, amount, nonce) with the account's spend key.
+        let msg = debit_message(from, to, token, Fr::from(amount), Fr::from(fnonce));
+        let from_sig = Schnorr::sign::<GrProjective>(&self.c, from_sk, &msg, &mut self.rng)
+            .expect("debit sign");
         // `from` siblings against the CURRENT root (valid for both old and new `from` leaf,
         // since updating a leaf leaves its own co-path siblings unchanged).
-        let fnext = *self.next_keys.get(&fk).unwrap_or(&Fr::from(0u64));
         let fbits: Vec<bool> = index_bits(fslot, self.depth);
         let fsibs: Vec<Fr> = self.tree.siblings(fslot as usize).expect("from siblings");
         let fnew = fbal - amount;
@@ -625,7 +760,7 @@ impl EpochExecutor {
         self.tree
             .update_and_prove(
                 fslot as usize,
-                &[from, fnext, token, Fr::from(fnew), Fr::from(fnn)],
+                &[from, fnext, token, Fr::from(fnew), Fr::from(fnn), from_pk_hash],
             )
             .expect("from: tree update");
         self.balances.insert(fk.clone(), fnew);
@@ -634,6 +769,7 @@ impl EpochExecutor {
         let tbal = self.balances[&tk];
         let tnonce = self.nonces[&tk];
         let tnext = *self.next_keys.get(&tk).unwrap_or(&Fr::from(0u64));
+        let to_pk_hash = self.pk_hashes[&tk];
         // `to` siblings against the INTERMEDIATE root (after the `from` update).
         let tbits: Vec<bool> = index_bits(tslot, self.depth);
         let tsibs: Vec<Fr> = self.tree.siblings(tslot as usize).expect("to siblings");
@@ -641,7 +777,7 @@ impl EpochExecutor {
         self.tree
             .update_and_prove(
                 tslot as usize,
-                &[to, tnext, token, Fr::from(tnew), Fr::from(tnonce)],
+                &[to, tnext, token, Fr::from(tnew), Fr::from(tnonce), to_pk_hash],
             )
             .expect("to: tree update");
         self.balances.insert(tk.clone(), tnew);
@@ -663,13 +799,17 @@ impl EpochExecutor {
             from_next_key: fnext,
             from_old_balance: Fr::from(fbal),
             from_old_nonce: Fr::from(fnonce),
+            from_pk_hash,
             from_index_bits: fbits,
             from_siblings: fsibs,
             to_next_key: tnext,
             to_old_balance: Fr::from(tbal),
             to_old_nonce: Fr::from(tnonce),
+            to_pk_hash,
             to_index_bits: tbits,
             to_siblings: tsibs,
+            from_pk,
+            from_sig,
         }
     }
 }
@@ -755,7 +895,7 @@ mod tests {
         exec.register(a, token, 0, 0);
         let z0 = exec.initial_state();
 
-        let mut ops = vec![exec.apply(0, pool, a, token, 500), OpWitness::padding(d)];
+        let mut ops = vec![exec.apply(0, pool, a, token, 500), OpWitness::padding(&cfg(), d)];
         // Flip a sibling the `from` inclusion proof depends on.
         ops[0].from_siblings[0] += Fr::from(1u64);
 
@@ -831,11 +971,13 @@ mod tests {
             token,
             balance: Fr::from(10u64),
             nonce: Fr::from(0u64),
+            pk_hash: Fr::from(0u64),
             low_key,
             low_next,
             low_token: Fr::from(0u64),
             low_balance: Fr::from(0u64),
             low_nonce: Fr::from(0u64),
+            low_pk_hash: Fr::from(0u64),
             low_index_bits: low_bits,
             low_siblings: low_sibs,
             new_index_bits: new_bits,
@@ -853,6 +995,36 @@ mod tests {
         assert!(
             !cs.is_satisfied().unwrap(),
             "duplicate key registration must be rejected (q < q fails)"
+        );
+    }
+
+    // A1 soundness: a debit with an invalid spend-key signature must be rejected in-circuit.
+    #[test]
+    fn bad_signature_rejected() {
+        let d = config::TREE_H - 1;
+        let token = Fr::from(1u64);
+        let pool = Fr::from(1000u64);
+        let a = Fr::from(2001u64);
+        let mut exec = EpochExecutor::new(d);
+        exec.register(pool, token, 1_000_000, 0);
+        exec.register(a, token, 0, 0);
+        let z0 = exec.initial_state();
+
+        let mut ops = vec![exec.apply(0, pool, a, token, 500)];
+        // Corrupt the debit signature scalar `s`; the in-circuit Schnorr verify must fail.
+        ops[0].from_sig.0 += GrScalar::from(1u64);
+
+        let circuit = LedgerCircuit::new(1, d);
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let z_var =
+            <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z0)).unwrap();
+        let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
+        let _ = circuit
+            .synthesize_step(i, z_var, EpochStepInput { regs: vec![], ops })
+            .unwrap();
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "invalid debit signature must be rejected"
         );
     }
 }
