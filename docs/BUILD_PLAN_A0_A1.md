@@ -54,6 +54,29 @@ ownership. The leaf binds both.
 | **4 — decider + on-chain** | Re-target prover to the LegoGroth16 decider; regenerate `DeciderVerifier.sol`; update `ProvenCheckpoint` (verify call + digest) and the escape hatch's on-chain leaf/Merkle hashing; re-measure gas | **PR #259 merged to `staging`**; forge tests green; gas re-measured at z_len=3 |
 | **5 — hardening** | New Groth16/LegoGroth16 phase-2 ceremony plan; audit realignment; full-bench measurement | ceremony transcripts; audit scope |
 
+## Phase 2 (A0) design note — corrected after reading plasma-blind
+
+Investigating plasma-blind's `sparsemt` corrected an earlier assumption. Two distinct primitives
+matter, and A0 needs the second:
+
+- **`sparsemt`** (`MerkleSparseTree` + `MerkleSparseTreeGadget`, built on arkworks
+  `merkle_tree::Config`) is a **sparse Merkle *map* addressed by an assigned index** (e.g.
+  plasma-blind's `publickeymap` uses a `UserId` as the leaf position, storing the key in the
+  leaf). Its gadget (`recover_root`/`update_root`/`check_update`) is a clean, `Config`-generic
+  version of our hand-rolled tree. Adopting it alone does **not** close the key-duplication gap —
+  an operator could still place a key at two indices, exactly like our current tree.
+- **The indexed/interval tree** — plasma-blind's `NullifierTree` uses `IntervalCRH` /
+  `IntervalCRHGadget` with `Leaf = (value, next)` sorted intervals. This is the
+  **indexed-Merkle-tree / non-membership** primitive that gives collision-free key-binding
+  (prove a key is absent via the low interval bracketing it, then insert). **This is the real A0
+  machinery**, and plasma-blind already implements it.
+
+So Phase 2 = port `sparsemt` (base map + gadget) **and** the `IntervalCRH`/indexed-tree layer, then
+key the ledger accounts through the interval tree (unforgeable membership + lazy insertion).
+Recommended staging: **2a** adopt `sparsemt` as the base Merkle-map gadget (replacing the
+hand-rolled tree, behaviour-equivalent); **2b** add the `IntervalCRH` indexed-tree layer for
+key-uniqueness/non-membership. 2a is mechanical; 2b is where A0's soundness is actually won.
+
 ## The new `FCircuit` trait (Phase 1 target)
 
 ```
