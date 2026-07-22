@@ -24,7 +24,8 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 > **[technical report](docs/REPORT.md)** — a self-contained explainer of what this is, what it
 > costs, and why it matters, with diagrams and charts. Where it fits (and where it doesn't):
 > **[docs/USE_CASES.md](docs/USE_CASES.md)**. Sovereignty & exit roadmap:
-> **[docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)**. Security details:
+> **[docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)** (deep-build plan for full non-custody:
+> **[docs/BUILD_PLAN_A0_A1.md](docs/BUILD_PLAN_A0_A1.md)**). Security details:
 > **[docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)**.
 
 ---
