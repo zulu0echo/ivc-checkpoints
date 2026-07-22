@@ -1,0 +1,8 @@
+{
+  "calldata_bytes": 1028,
+  "deploy_gas": 3221071,
+  "note": "light-test verifier; gas is structurally representative of production (see README)",
+  "settle_epoch_proven_tx_gas": 3614054,
+  "verify_nova_proof_tx_gas": 799731,
+  "z_len": 3
+}

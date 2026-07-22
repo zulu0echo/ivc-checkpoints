@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 400" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <rect x="0" y="0" width="680" height="400" fill="#ffffff"/>
+  <text x="24" y="30" font-size="17" font-weight="700" fill="#14142b">On-chain gas vs. operations in an epoch</text>
+  <text x="24" y="50" font-size="12" fill="#555">One folded proof is flat; verifying each operation is linear. They cross at just 4 ops.</text>
+
+  <!-- axes -->
+  <line x1="70" y1="320" x2="640" y2="320" stroke="#333" stroke-width="1.2"/>
+  <line x1="70" y1="60" x2="70" y2="320" stroke="#333" stroke-width="1.2"/>
+
+  <!-- y gridlines + labels (0..10M) -->
+  <g font-size="10" fill="#777">
+    <line x1="70" y1="320" x2="640" y2="320" stroke="#eee"/><text x="34" y="323">0</text>
+    <line x1="70" y1="264" x2="640" y2="264" stroke="#eee"/><text x="26" y="267">2M</text>
+    <line x1="70" y1="208" x2="640" y2="208" stroke="#eee"/><text x="26" y="211">4M</text>
+    <line x1="70" y1="152" x2="640" y2="152" stroke="#eee"/><text x="26" y="155">6M</text>
+    <line x1="70" y1="96"  x2="640" y2="96"  stroke="#eee"/><text x="26" y="99">8M</text>
+    <text x="20" y="66">10M</text>
+  </g>
+  <!-- x labels -->
+  <g font-size="10" fill="#777" text-anchor="middle">
+    <text x="70" y="336">0</text><text x="165" y="336">8</text><text x="260" y="336">16</text>
+    <text x="355" y="336">24</text><text x="450" y="336">32</text><text x="545" y="336">40</text><text x="640" y="336">48</text>
+  </g>
+  <text x="355" y="356" font-size="11" fill="#555" text-anchor="middle">operations settled in the epoch</text>
+  <text x="18" y="52" font-size="11" fill="#555">gas</text>
+
+  <!-- per-op line: y = 200000 * x  (steep) -->
+  <line x1="70" y1="320" x2="640" y2="51.2" stroke="#e4572e" stroke-width="2.4"/>
+  <text x="560" y="70" font-size="11" fill="#e4572e" font-weight="600">verify each op</text>
+  <text x="560" y="84" font-size="10" fill="#e4572e">~200k gas/op</text>
+
+  <!-- folded-proof flat line: y = 799,731 -->
+  <line x1="70" y1="297.6" x2="640" y2="297.6" stroke="#2a9d8f" stroke-width="2.6"/>
+  <text x="360" y="291" font-size="11" fill="#2a9d8f" font-weight="600">one folded epoch proof — ~0.8M gas, flat</text>
+
+  <!-- crossover marker at x=4 -->
+  <circle cx="117.5" cy="297.6" r="4" fill="#14142b"/>
+  <text x="123" y="290" font-size="10" fill="#14142b">crossover @ 4 ops</text>
+
+  <!-- full-scale annotation -->
+  <rect x="360" y="120" width="272" height="52" rx="6" fill="#f4f6f8" stroke="#dde3e8"/>
+  <text x="372" y="139" font-size="11" fill="#14142b" font-weight="600">At large daily scale (42,705 ops):</text>
+  <text x="372" y="155" font-size="11" fill="#e4572e">per-op: ~8.5 billion gas</text>
+  <text x="372" y="168" font-size="11" fill="#2a9d8f">folded proof: ~0.8 million gas  (~10,000× less)</text>
+</svg>

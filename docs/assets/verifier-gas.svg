@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 260" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <rect x="0" y="0" width="680" height="260" fill="#ffffff"/>
+  <text x="24" y="30" font-size="17" font-weight="700" fill="#14142b">Where the ~0.8M verifier gas goes (per epoch, constant)</text>
+  <text x="24" y="50" font-size="12" fill="#555">Model decomposition (z_len=3). Measured on-chain: 799,731 gas — within +1.95% of the 784,428 model.</text>
+
+  <!-- segmented bar: total 784,428 over width 600 (x 40..640) -->
+  <g>
+    <rect x="40"    y="80" width="204.0" height="46" fill="#264653"/>
+    <rect x="244.0" y="80" width="138.5" height="46" fill="#2a9d8f"/>
+    <rect x="382.5" y="80" width="192.4" height="46" fill="#e9c46a"/>
+    <rect x="574.9" y="80" width="9.7"   height="46" fill="#8ab17d"/>
+    <rect x="584.6" y="80" width="26.8"  height="46" fill="#b56576"/>
+    <rect x="611.4" y="80" width="28.6"  height="46" fill="#9a8c98"/>
+    <rect x="40" y="80" width="600" height="46" fill="none" stroke="#14142b" stroke-width="1"/>
+  </g>
+
+  <!-- legend -->
+  <g font-size="11" fill="#333">
+    <rect x="40"  y="150" width="12" height="12" fill="#264653"/><text x="58"  y="160">Groth16 MSM over public inputs — 266,700</text>
+    <rect x="40"  y="170" width="12" height="12" fill="#2a9d8f"/><text x="58"  y="180">Groth16 pairing — 181,100</text>
+    <rect x="40"  y="190" width="12" height="12" fill="#e9c46a"/><text x="58"  y="200">2 × KZG opening check — 251,600</text>
+    <rect x="360" y="150" width="12" height="12" fill="#8ab17d"/><text x="378" y="160">fold random-linear-combo EC ops — 12,700</text>
+    <rect x="360" y="170" width="12" height="12" fill="#b56576"/><text x="378" y="180">Solidity dispatch / ABI overhead — 35,000</text>
+    <rect x="360" y="190" width="12" height="12" fill="#9a8c98"/><text x="378" y="200">intrinsic + calldata (1,028 B) — 37,328</text>
+  </g>
+
+  <text x="24" y="238" font-size="11" fill="#555">Every term is a fixed elliptic-curve / pairing cost — independent of how many operations the proof covers.</text>
+</svg>

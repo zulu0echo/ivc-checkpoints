@@ -1,0 +1,30 @@
+{
+  "batch_size": 16,
+  "calldata_bytes": 1028,
+  "decider_prove_ms": 28728,
+  "fold_ms_per_step": [
+    1364,
+    1245,
+    1869,
+    1842,
+    1854,
+    1868,
+    1858,
+    1876,
+    1891,
+    1950,
+    1888,
+    1965
+  ],
+  "fold_ms_per_step_avg": 1789,
+  "fold_ms_total": 21470,
+  "light_test": true,
+  "op_count": 183,
+  "peak_rss_bytes": 7373651968,
+  "platform": "macos",
+  "scale": "small",
+  "steps": 12,
+  "tree_depth": 22,
+  "verify_gas_revm": 0,
+  "z_len": 3
+}

@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Foundry
+/contracts/out
+/contracts/cache
+/contracts/broadcast
+
+# Prover artifacts that are large / machine-specific.
+# The *generated verifier* and a sample calldata ARE committed (see contracts/generated/),
+# but transient proving keys and full-epoch witness dumps are not.
+*.pk
+*.vk
+/prover-cache
+/bench/witness-dumps
+
+# Measurement outputs are regenerated; keep the checked-in reference copy only.
+/results/*.local.json
+
+# OS / editor
+.DS_Store
+*.swp

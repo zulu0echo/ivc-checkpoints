@@ -1,0 +1,48 @@
+{
+  "provenance": "[M] measured on the pinned toolchain unless noted [A]",
+  "z_len": 3,
+  "analytical_model_reference": {
+    "public_inputs": 42,
+    "calldata": 1028,
+    "exec_gas": 747100,
+    "tx_gas": 784428
+  },
+  "prover": {
+    "batch_size": 16,
+    "calldata_bytes": 1028,
+    "decider_prove_ms": 28728,
+    "fold_ms_per_step": [
+      1364,
+      1245,
+      1869,
+      1842,
+      1854,
+      1868,
+      1858,
+      1876,
+      1891,
+      1950,
+      1888,
+      1965
+    ],
+    "fold_ms_per_step_avg": 1789,
+    "fold_ms_total": 21470,
+    "light_test": true,
+    "op_count": 183,
+    "peak_rss_bytes": 7373651968,
+    "platform": "macos",
+    "scale": "small",
+    "steps": 12,
+    "tree_depth": 22,
+    "verify_gas_revm": 0,
+    "z_len": 3
+  },
+  "forge_gas": {
+    "calldata_bytes": 1028,
+    "deploy_gas": 3221071,
+    "note": "light-test verifier; gas is structurally representative of production (see README)",
+    "settle_epoch_proven_tx_gas": 3614054,
+    "verify_nova_proof_tx_gas": 799731,
+    "z_len": 3
+  }
+}

@@ -1,0 +1,28 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "End-to-end measurement harness: fold a synthetic epoch and record prover-side [M] numbers"
+
+[dependencies]
+prover = { path = "../crates/prover" }
+ledger-circuit = { path = "../crates/ledger-circuit" }
+ark-bn254 = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+libc = "0.2"
+
+[features]
+default = []
+# Run the large daily epoch (~42,705 ops). Needs the decider's ~64 GB RAM unless
+# combined with light-test. Without this feature the bench runs only the small path.
+full-bench = []
+# Reduce the DeciderEthCircuit so the small (or full) path runs on modest hardware / CI.
+light-test = ["prover/light-test"]
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"

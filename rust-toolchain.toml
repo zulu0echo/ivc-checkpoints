@@ -1,0 +1,7 @@
+[toolchain]
+# sonobe @ 63f2930d pins 1.88.0, but its UNpinned arkworks git patches have since moved:
+# ruint (via revm in solidity-verifiers) now requires rustc >= 1.90. We pin arkworks back
+# to its Feb-2026 0.5.x commits (see root Cargo.toml [patch]) and use a newer stable so the
+# ruint/revm side builds. arkworks 0.5.x compiles fine on this toolchain.
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 260" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <rect x="0" y="0" width="680" height="260" fill="#ffffff"/>
+  <text x="24" y="30" font-size="17" font-weight="700" fill="#14142b">Why the prover is heavy: decider circuit ≈ 12.05M constraints</text>
+  <text x="24" y="50" font-size="12" fill="#555">A fixed ~10.5M-constraint folding overhead dwarfs the ledger logic — so per-op tuning barely moves the total.</text>
+
+  <!-- bar total 12,050,881 over width 600 (x 40..640) -->
+  <rect x="40"    y="82" width="524.9" height="48" fill="#3d5a80"/>
+  <rect x="564.9" y="82" width="75.1"  height="48" fill="#ee6c4d"/>
+  <rect x="40" y="82" width="600" height="48" fill="none" stroke="#14142b" stroke-width="1"/>
+
+  <text x="300" y="111" font-size="12" fill="#fff" text-anchor="middle" font-weight="600">fixed CycleFold decider — 10,543,489</text>
+  <text x="602" y="76" font-size="11" fill="#ee6c4d" text-anchor="middle" font-weight="600">ledger</text>
+  <text x="602" y="150" font-size="10" fill="#ee6c4d" text-anchor="middle">3 × 502,464</text>
+  <text x="602" y="163" font-size="10" fill="#ee6c4d" text-anchor="middle">= 1,507,392</text>
+
+  <!-- measured callouts -->
+  <g font-size="11" fill="#333">
+    <text x="40" y="195" font-weight="600" fill="#14142b">Measured [M] from the ConstraintSystem:</text>
+    <text x="40" y="214">• per operation: 31,404 constraints  (two depth-22 Poseidon path updates dominate)</text>
+    <text x="40" y="232">• per fold step (batch B=16): 502,464 constraints</text>
+    <text x="40" y="250">• decider = 10,543,489 + 3 × (per-step) = 12,050,881  →  needs ≈ 64 GB RAM, minutes/epoch</text>
+  </g>
+</svg>

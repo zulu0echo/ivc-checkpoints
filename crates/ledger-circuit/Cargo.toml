@@ -1,0 +1,24 @@
+[package]
+name = "ledger-circuit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Epoch-ledger F-circuit (sonobe FCircuit) — Poseidon IMT depth 22, batched ops"
+
+[dependencies]
+folding-schemes = { workspace = true }
+ark-ff = { workspace = true }
+ark-std = { workspace = true }
+ark-serialize = { workspace = true }
+ark-relations = { workspace = true }
+ark-r1cs-std = { workspace = true }
+ark-crypto-primitives = { workspace = true, features = ["crh", "sponge", "constraints"] }
+ark-bn254 = { workspace = true }
+
+[dev-dependencies]
+ark-bn254 = { workspace = true }
+
+[features]
+# Reduce the batch size / depth in cheap unit tests when set by a consumer.
+default = []

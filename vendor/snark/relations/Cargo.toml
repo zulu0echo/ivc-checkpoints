@@ -1,0 +1,45 @@
+[package]
+name = "ark-relations"
+version.workspace = true
+authors.workspace = true
+description = "A library for generalized rank-one constraint systems"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/ark-relations/"
+keywords = ["zero-knowledge", "cryptography", "zkSNARK", "SNARK", "constraint-systems"]
+categories = ["cryptography"]
+include = ["Cargo.toml", "src", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+ark-ff.workspace = true
+ark-std.workspace = true
+ark-poly.workspace = true
+ark-serialize.workspace = true
+tracing = { workspace = true, features = ["attributes"] }
+tracing-subscriber = { workspace = true, default-features = true, optional = true }
+rayon = { workspace = true, optional = true }
+indexmap = { workspace = true }
+foldhash = { workspace = true }
+
+[dev-dependencies]
+ark-test-curves = { workspace = true, default-features = false, features = [ "bls12_381_scalar_field" ] }
+jemallocator = { version = "0.5" } 
+mimalloc = { version = "0.1" } 
+
+[features]
+default = []
+std = [ "ark-std/std", "ark-ff/std", "tracing-subscriber", "tracing/std", "indexmap/std", "foldhash/std" ]
+parallel = [ "std", "ark-std/parallel", "ark-ff/parallel", "rayon" ]
+
+
+[[example]]
+name = "non-satisfiable"
+path = "examples/non_satisfiable.rs"
+required-features = ["std"]
+
+[[example]]
+name = "satisfiable"
+path = "examples/satisfiable.rs"
+required-features = ["std"]
