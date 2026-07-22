@@ -82,10 +82,12 @@ pub struct OpWitness {
     pub token_id: Fr,
     pub amount: Fr,
     pub nonce: Fr,
+    pub from_next_key: Fr,
     pub from_old_balance: Fr,
     pub from_old_nonce: Fr,
     pub from_index_bits: Vec<bool>,
     pub from_siblings: Vec<Fr>,
+    pub to_next_key: Fr,
     pub to_old_balance: Fr,
     pub to_old_nonce: Fr,
     pub to_index_bits: Vec<bool>,
@@ -102,10 +104,12 @@ impl OpWitness {
             token_id: Fr::from(0u64),
             amount: Fr::from(0u64),
             nonce: Fr::from(0u64),
+            from_next_key: Fr::from(0u64),
             from_old_balance: Fr::from(0u64),
             from_old_nonce: Fr::from(0u64),
             from_index_bits: vec![false; depth],
             from_siblings: vec![Fr::from(0u64); depth],
+            to_next_key: Fr::from(0u64),
             to_old_balance: Fr::from(0u64),
             to_old_nonce: Fr::from(0u64),
             to_index_bits: vec![false; depth],
@@ -139,6 +143,32 @@ fn enforce_bit_width(x: &FpVar<Fr>, bits: usize) -> Result<(), SynthesisError> {
     for b in le.iter().skip(bits) {
         b.enforce_equal(&Boolean::FALSE)?;
     }
+    Ok(())
+}
+
+/// Bit-width bound for interval keys: keys are treated as `KEY_BITS`-bounded integers so the
+/// `<` comparison below is well-defined (no field wraparound). 160 bits covers Ethereum
+/// address-sized keys and is well under BN254's ~254-bit modulus.
+pub const KEY_BITS: usize = 160;
+
+/// Conditionally enforce strict `a < b` (as `KEY_BITS`-bounded integers) when `should` is true.
+/// When `should` is false the check is neutralised (it compares `0 < 1`, always valid), so it is
+/// safe to call on padding / inactive ops. Soundness relies on bounding both operands to
+/// `KEY_BITS` bits, which rules out a wraparound where a large `b - a` masquerades as small.
+fn enforce_lt_when(
+    a: &FpVar<Fr>,
+    b: &FpVar<Fr>,
+    should: &Boolean<Fr>,
+) -> Result<(), SynthesisError> {
+    let zero = FpVar::<Fr>::zero();
+    let one = FpVar::<Fr>::one();
+    let a_eff = should.select(a, &zero)?;
+    let b_eff = should.select(b, &one)?;
+    enforce_bit_width(&a_eff, KEY_BITS)?;
+    enforce_bit_width(&b_eff, KEY_BITS)?;
+    // a < b  <=>  (b - a - 1) fits in KEY_BITS bits, given a, b < 2^KEY_BITS.
+    let diff_m1 = &b_eff - &a_eff - &one;
+    enforce_bit_width(&diff_m1, KEY_BITS)?;
     Ok(())
 }
 
@@ -192,8 +222,10 @@ impl FCircuit for LedgerCircuit {
             let token_id = FpVar::new_witness(cs.clone(), || Ok(op.token_id))?;
             let amount = FpVar::new_witness(cs.clone(), || Ok(op.amount))?;
             let nonce = FpVar::new_witness(cs.clone(), || Ok(op.nonce))?;
+            let from_next_key = FpVar::new_witness(cs.clone(), || Ok(op.from_next_key))?;
             let from_old_balance = FpVar::new_witness(cs.clone(), || Ok(op.from_old_balance))?;
             let from_old_nonce = FpVar::new_witness(cs.clone(), || Ok(op.from_old_nonce))?;
+            let to_next_key = FpVar::new_witness(cs.clone(), || Ok(op.to_next_key))?;
             let to_old_balance = FpVar::new_witness(cs.clone(), || Ok(op.to_old_balance))?;
             let to_old_nonce = FpVar::new_witness(cs.clone(), || Ok(op.to_old_nonce))?;
             let mut from_sibs = Vec::with_capacity(self.depth);
@@ -208,8 +240,13 @@ impl FCircuit for LedgerCircuit {
             }
 
             // (1) inclusion of `from` against current root (leaf preimage hashed inside recover_root)
-            let from_old_leaf =
-                [from_key.clone(), token_id.clone(), from_old_balance.clone(), from_old_nonce.clone()];
+            let from_old_leaf = [
+                from_key.clone(),
+                from_next_key.clone(),
+                token_id.clone(),
+                from_old_balance.clone(),
+                from_old_nonce.clone(),
+            ];
             let from_old_root = mt.recover_root(&from_old_leaf, &from_bits, &from_sibs)?;
             from_old_root.conditional_enforce_equal(&state_root, &active)?;
 
@@ -224,22 +261,37 @@ impl FCircuit for LedgerCircuit {
 
             // (4a) debit -> intermediate root
             let from_new_nonce = &from_old_nonce + &one;
-            let from_new_leaf =
-                [from_key.clone(), token_id.clone(), from_new_balance.clone(), from_new_nonce];
+            let from_new_leaf = [
+                from_key.clone(),
+                from_next_key.clone(),
+                token_id.clone(),
+                from_new_balance.clone(),
+                from_new_nonce,
+            ];
             let inter_active = mt.recover_root(&from_new_leaf, &from_bits, &from_sibs)?;
             let inter_root = FpVar::conditionally_select(&active, &inter_active, &state_root)?;
 
             // to inclusion vs intermediate
-            let to_old_leaf =
-                [to_key.clone(), token_id.clone(), to_old_balance.clone(), to_old_nonce.clone()];
+            let to_old_leaf = [
+                to_key.clone(),
+                to_next_key.clone(),
+                token_id.clone(),
+                to_old_balance.clone(),
+                to_old_nonce.clone(),
+            ];
             let to_old_root = mt.recover_root(&to_old_leaf, &to_bits, &to_sibs)?;
             to_old_root.conditional_enforce_equal(&inter_root, &active)?;
 
             // (4b) credit
             let to_new_balance = &to_old_balance + &amount;
             enforce_bit_width(&to_new_balance, VALUE_BITS)?;
-            let to_new_leaf =
-                [to_key.clone(), token_id.clone(), to_new_balance, to_old_nonce.clone()];
+            let to_new_leaf = [
+                to_key.clone(),
+                to_next_key.clone(),
+                token_id.clone(),
+                to_new_balance,
+                to_old_nonce.clone(),
+            ];
             let new_active = mt.recover_root(&to_new_leaf, &to_bits, &to_sibs)?;
             state_root = FpVar::conditionally_select(&active, &new_active, &inter_root)?;
 
@@ -267,6 +319,7 @@ pub struct EpochExecutor {
     slots: HashMap<Vec<u8>, u64>,
     balances: HashMap<Vec<u8>, u128>,
     nonces: HashMap<Vec<u8>, u64>,
+    next_keys: HashMap<Vec<u8>, Fr>,
     next: u64,
     ops_acc: Fr,
     nets_acc: Fr,
@@ -289,6 +342,7 @@ impl EpochExecutor {
             slots: HashMap::new(),
             balances: HashMap::new(),
             nonces: HashMap::new(),
+            next_keys: HashMap::new(),
             next: 0,
             ops_acc: Fr::from(0u64),
             nets_acc: Fr::from(0u64),
@@ -304,8 +358,13 @@ impl EpochExecutor {
         });
         self.balances.insert(k.clone(), bal);
         self.nonces.insert(k.clone(), nonce);
+        // next_key defaults to 0 here; Phase 2b-3 maintains the real sorted-interval pointer.
+        let next_key = *self.next_keys.entry(k.clone()).or_insert(Fr::from(0u64));
         self.tree
-            .update_and_prove(slot as usize, &[key, token, Fr::from(bal), Fr::from(nonce)])
+            .update_and_prove(
+                slot as usize,
+                &[key, next_key, token, Fr::from(bal), Fr::from(nonce)],
+            )
             .expect("register: tree update");
     }
     pub fn initial_state(&self) -> [Fr; 3] {
@@ -323,24 +382,32 @@ impl EpochExecutor {
         assert!(fbal >= amount, "insufficient");
         // `from` siblings against the CURRENT root (valid for both old and new `from` leaf,
         // since updating a leaf leaves its own co-path siblings unchanged).
+        let fnext = *self.next_keys.get(&fk).unwrap_or(&Fr::from(0u64));
         let fbits: Vec<bool> = index_bits(fslot, self.depth);
         let fsibs: Vec<Fr> = self.tree.siblings(fslot as usize).expect("from siblings");
         let fnew = fbal - amount;
         let fnn = fnonce + 1;
         self.tree
-            .update_and_prove(fslot as usize, &[from, token, Fr::from(fnew), Fr::from(fnn)])
+            .update_and_prove(
+                fslot as usize,
+                &[from, fnext, token, Fr::from(fnew), Fr::from(fnn)],
+            )
             .expect("from: tree update");
         self.balances.insert(fk.clone(), fnew);
         self.nonces.insert(fk.clone(), fnn);
 
         let tbal = self.balances[&tk];
         let tnonce = self.nonces[&tk];
+        let tnext = *self.next_keys.get(&tk).unwrap_or(&Fr::from(0u64));
         // `to` siblings against the INTERMEDIATE root (after the `from` update).
         let tbits: Vec<bool> = index_bits(tslot, self.depth);
         let tsibs: Vec<Fr> = self.tree.siblings(tslot as usize).expect("to siblings");
         let tnew = tbal + amount;
         self.tree
-            .update_and_prove(tslot as usize, &[to, token, Fr::from(tnew), Fr::from(tnonce)])
+            .update_and_prove(
+                tslot as usize,
+                &[to, tnext, token, Fr::from(tnew), Fr::from(tnonce)],
+            )
             .expect("to: tree update");
         self.balances.insert(tk.clone(), tnew);
 
@@ -358,10 +425,12 @@ impl EpochExecutor {
             token_id: token,
             amount: Fr::from(amount),
             nonce: Fr::from(fnonce),
+            from_next_key: fnext,
             from_old_balance: Fr::from(fbal),
             from_old_nonce: Fr::from(fnonce),
             from_index_bits: fbits,
             from_siblings: fsibs,
+            to_next_key: tnext,
             to_old_balance: Fr::from(tbal),
             to_old_nonce: Fr::from(tnonce),
             to_index_bits: tbits,
@@ -373,6 +442,29 @@ impl EpochExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_relations::gr1cs::ConstraintSystem;
+
+    // Helper: does `enforce_lt_when(a, b, should)` leave the CS satisfiable?
+    fn lt_ok(a: u64, b: u64, should: bool) -> bool {
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let av = FpVar::new_witness(cs.clone(), || Ok(Fr::from(a))).unwrap();
+        let bv = FpVar::new_witness(cs.clone(), || Ok(Fr::from(b))).unwrap();
+        let s = Boolean::new_witness(cs.clone(), || Ok(should)).unwrap();
+        enforce_lt_when(&av, &bv, &s).unwrap();
+        cs.is_satisfied().unwrap()
+    }
+
+    #[test]
+    fn bounded_lt_gadget() {
+        // active: strict less-than is enforced
+        assert!(lt_ok(3, 7, true), "3 < 7 holds");
+        assert!(!lt_ok(7, 3, true), "7 < 3 must fail");
+        assert!(!lt_ok(5, 5, true), "5 < 5 must fail (strict)");
+        assert!(lt_ok(0, 1, true), "0 < 1 holds");
+        // inactive: neutralised, always satisfiable regardless of operands
+        assert!(lt_ok(7, 3, false), "inactive comparison is neutralised");
+        assert!(lt_ok(5, 5, false), "inactive comparison is neutralised");
+    }
 
     #[test]
     fn single_batch_native_matches_circuit() {
