@@ -1,4 +1,4 @@
-# Handoff — resume state (2026-07-22, Phase 3 complete — full non-custody A0+A1)
+# Handoff — resume state (2026-07-22, Phases 1–5 substantively done; on-chain contract rewire is the residual)
 
 This file lets a fresh session continue the `ivc-checkpoints` work with no prior context.
 Read this, then `docs/BUILD_PLAN_A0_A1.md`, then the "Immediate next step" below.
@@ -33,7 +33,9 @@ Reuse [plasma-blind](https://github.com/privacy-ethereum/plasma-blind)'s primiti
 | 2a — adopt `sparsemt` as base Merkle-map gadget (behaviour-equivalent) | ✅ done — agreement + tamper tests green |
 | 2b — unified indexed/interval account tree (real A0 key-uniqueness/non-membership) | ✅ done — register agreement + duplicate-key-rejected tests green |
 | 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | ✅ done — bad-signature-rejected test green; ~5,136 constraints/verify |
-| **4 — decider/EVM re-target + `ProvenCheckpoint` wiring** | **🚧 NEXT — GATED on sonobe PR #259 merging to `staging`** |
+| 4 — decider/EVM (LegoGroth16) on the real circuit | ✅ measured — **696,556 gas** in revm; `--features evm` compiles; DeciderVerifier.sol rendered. See DECIDER_RESULTS.md |
+| 5 — ceremony plan + audit scope + benchmarks | ✅ docs — CEREMONY_AND_AUDIT.md |
+| **residual — `ProvenCheckpoint.sol` on-chain rewire** | **🚧 NEXT — arity-6 Poseidon + `verifyDeciderProof` ABI + forge** |
 | 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | pending |
 | 4 — decider/EVM re-target (LegoGroth16), regen `DeciderVerifier.sol`, update contracts, re-measure gas | pending — **GATED on sonobe PR #259 merging to `staging`** |
 | 5 — ceremony/audit hardening | pending |
@@ -110,18 +112,38 @@ key. What landed:
 **Full non-custody (A0 + A1) is now enforced in the folding circuit.** The classic `main` prototype
 remains the on-chain reference until Phase 4 lands.
 
-## Immediate next step (Phase 4 — decider/EVM) — GATED
-Re-target the prover to the new-line **LegoGroth16 decider**, regenerate `DeciderVerifier.sol`, and
-wire `ProvenCheckpoint` (verify entrypoint + digest + the exit path's on-chain leaf/Merkle hashing,
-now arity-6 + interval + pk_hash), then re-measure gas at `z_len = 3`. **Do not start until sonobe
-PR #259 merges to `staging`** — the decider is on the moving `revamp/decider` branch
-(`sonobe-primitives` rev `243391e`). Also reconcile the rev with plasma-blind's `dmpierre/sonobe@8269ea4`.
-Until then, the circuit work (Phases 1–3) is complete and testable without the decider.
+## Phase 4/5 — DONE (committed on `newline-port`)
+Built against sonobe PR #259 (`243391e`) at the user's explicit direction (i.e. NOT gated on the
+merge). The full A0+A1 circuit folds through Nova+CycleFold → LegoGroth16 → `DeciderVerifier.sol` →
+solc 0.8.35 → revm, **verifying for 696,556 gas** (~280 s, 7.7 GB peak) — cheaper than the classic
+line (799,731). Reproduction: `test_ledger_decider_evm` in a sonobe `revamp/decider` checkout whose
+`crates/ledger` == this circuit. In-repo: `cargo +1.97.1 build -p ledger-circuit-newline --features
+evm` compiles the circuit against the decider crate (`FCircuitEVMExt`, state → `uint256[3]`).
+Artifacts: `contracts/generated/newline/{DeciderVerifier,LegoGroth16Verifier}.sol` (dev setup).
+Docs: `docs/DECIDER_RESULTS.md`, `docs/CEREMONY_AND_AUDIT.md`. Requires Rust 1.97.1 for the EVM path
+(revm needs ≥1.91; repo default toolchain is 1.97.1).
 
-Known follow-ups to fold into Phase 4/5 (from earlier notes): R4 anti-clobber has no dedicated
-negative test; fixed `reg_batch`/`batch` per step; keys assumed `< 2^160`; the empty-leaf-=0
-deviation from audited `sparsemt` must be in the audit scope; on-chain Poseidon (PoseidonT5) must be
-re-derived for `poseidon_circom_config` and extended to the arity-6 leaf.
+## Immediate next step (residual — on-chain `ProvenCheckpoint` rewire)
+The only substantive unfinished piece. The Solidity still targets the **classic** `DeciderEth` ABI +
+an **arity-4** leaf. To finish (all Solidity/Foundry, no new circuit work):
+1. **`PoseidonT5.sol` → arity-6.** Generate the arity-6 Poseidon constants for
+   `poseidon_circom_config`, add a `hash6` (leaf) alongside the existing `hash2` (node), and add a
+   Rust↔Solidity fixture cross-check (mirror the existing hash4/hash2 fixture flow on `main`).
+2. **Verify entrypoint.** Replace the classic verify call with
+   `verifyDeciderProof(i, z_0[3], z_i[3], challenge, U_cm_e[2], cm_t[2], U_cm_w[2], u_cm_w[2],
+   proof[12])` (see `contracts/generated/newline/DeciderVerifier.sol`, pragma `^0.8.35`); store /
+   compare the `z = [root, opsAcc, netsAcc]` digest.
+3. **Exit path.** Recompute the exit leaf as the arity-6 interval leaf
+   `(key, next_key, token, balance, nonce, pk_hash)`; the escape hatch still keys ownership on `key`
+   (ECDSA/`msg.sender`).
+4. Forge tests + gas; note it targets the **dev-setup** verifier until the ceremony.
+A repo-side runnable prover binary (folding LedgerCircuit → decider) is deferred alongside this —
+it wants the same git-pinned decider deps in a runnable crate; the `evm` feature already proves the
+dep wiring resolves.
+
+Known smaller follow-ups (also in `docs/CEREMONY_AND_AUDIT.md` audit scope): R4 anti-clobber has no
+dedicated negative test; fixed `reg_batch`/`batch` per step; keys assumed `< 2^160`; empty-leaf-=0
+`sparsemt` deviation; re-measure at `TREE_H=23` / larger batch on bigger hardware.
 
 ## Key source locations (plasma-blind — the port source)
 Scratchpad clones live under the **session-specific** dir and are **likely GONE in a new session**.
