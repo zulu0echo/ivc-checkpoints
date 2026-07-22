@@ -1,4 +1,4 @@
-# Handoff — resume state (2026-07-22)
+# Handoff — resume state (2026-07-22, Phase 2a complete)
 
 This file lets a fresh session continue the `ivc-checkpoints` work with no prior context.
 Read this, then `docs/BUILD_PLAN_A0_A1.md`, then the "Immediate next step" below.
@@ -30,63 +30,52 @@ Reuse [plasma-blind](https://github.com/privacy-ethereum/plasma-blind)'s primiti
 |---|---|
 | 0 — spike: new-line EVM decider works, gas ≈ 669k (LegoGroth16, trivial circuit) | ✅ done, measured |
 | 1 — port ledger `FCircuit` to new trait; native-vs-circuit agreement test | ✅ done, green (`cargo test -p ledger-circuit-newline`) |
-| **2a — adopt `sparsemt` as base Merkle-map gadget (behaviour-equivalent)** | **🚧 IN PROGRESS — see below** |
-| 2b — add `IntervalCRH` indexed-tree layer (real A0 key-uniqueness/non-membership) | pending |
+| 2a — adopt `sparsemt` as base Merkle-map gadget (behaviour-equivalent) | ✅ done — agreement + tamper tests green |
+| **2b — add `IntervalCRH` indexed-tree layer (real A0 key-uniqueness/non-membership)** | **🚧 NEXT — see below** |
 | 3 — A1: plasma-blind `schnorr` per-debit in-circuit auth | pending |
 | 4 — decider/EVM re-target (LegoGroth16), regen `DeciderVerifier.sol`, update contracts, re-measure gas | pending — **GATED on sonobe PR #259 merging to `staging`** |
 | 5 — ceremony/audit hardening | pending |
 
-## Where Phase 2a is right now (exact)
-Done and committed on `newline-port`:
-- Copied plasma-blind `sparsemt/{mod.rs,constraints.rs}` into
-  `crates/ledger-circuit-newline/src/sparsemt/`. Fixed internal path refs
-  (`crate::primitives::sparsemt` → `crate::sparsemt`).
-- Added `merkle_tree` to the crate's `ark-crypto-primitives` features.
-- Added `pub mod sparsemt;` to `crates/ledger-circuit-newline/src/lib.rs`.
-- **`cargo build -p ledger-circuit-newline --release` is GREEN** — the ported `sparsemt`
-  (native `MerkleSparseTree` + gadget `MerkleSparseTreeGadget`) compiles **generically** in our
-  arkworks-0.6 / sonobe-primitives@243391e stack. It is not yet *instantiated* or *used* by the
-  circuit — that's the remaining 2a work.
+## Phase 2a — DONE (committed on `newline-port`)
+The account tree is now plasma-blind's `sparsemt`, behaviour-equivalent to the Phase-1 hand-rolled
+tree. What landed:
+- `crates/ledger-circuit-newline/src/sparsemt/{mod.rs,constraints.rs}` — plasma-blind's
+  `MerkleSparseTree` + `MerkleSparseTreeGadget`, path-fixed for this crate.
+- `crates/ledger-circuit-newline/src/config.rs` — a Poseidon-backed `merkle_tree::Config` +
+  `ConfigGadget` (`LedgerConfig<const H>` / `LedgerConfigGadget<const H>`). Leaf = **sized**
+  `[Fr;4]` `(key, tokenId, balance, nonce)`; leaf hash = a custom sized-input CRH (`LeafCrh` /
+  `LeafCrhVar`) wrapping `poseidon::CRH`/`CRHGadget` (needed because stock `poseidon::CRH` has
+  unsized `Input=[F]` but the sparse tree needs `Leaf: Sized`+`Default`); node hash = arkworks
+  built-in `poseidon::TwoToOneCRH`/`TwoToOneCRHGadget`. **All hashes take `poseidon_circom_config()`**,
+  so the tree is bit-identical to Phase-1's hashing. `TREE_H` const = tree height (currently 11 →
+  depth 10; production would raise to 23).
+- `lib.rs`: `synthesize_step` uses `mt.recover_root(&leaf_preimage, &index_bits, &siblings)`
+  (`recover_root` hashes the preimage internally, so the explicit leaf-hash step was removed);
+  `EpochExecutor` runs on `MerkleSparseTree` (`blank`/`update_and_prove`/`siblings`). Assigned
+  index = account slot (key-uniqueness is 2b's job). The hand-rolled `MerkleTree` +
+  `merkle_root_gadget` are gone.
+- Tests green: `single_batch_native_matches_circuit` (native == circuit, all op kinds) and
+  `tampered_sibling_breaks_inclusion` (flipping a sibling makes the CS unsatisfiable → the
+  inclusion constraints bind).
 
-## Immediate next step (finish 2a)
-Behaviour-equivalent swap of the hand-rolled tree for `sparsemt`. In `ledger-circuit-newline`:
+Notes for later: `recover_root`/`siblings` use LSB-first path bits where bit i = "node at level i
+is a right child"; the native `MerkleSparseTree` heap layout (`is_left_child = idx % 2 == 1`,
+leaf at `idx + 2^(H-1) - 1`) matches this exactly, and `poseidon::TwoToOneCRH(a,b)` equals
+`CRH([a,b])`, which is why the swap is behaviour-equivalent. `sparsemt/{mod.rs,constraints.rs}`
+carry two harmless `unused import` warnings inherited from plasma-blind.
 
-1. **Define a Poseidon-backed `merkle_tree::Config`** (new file `src/config.rs`), generic over
-   height so tests can use a small tree:
-   ```rust
-   pub struct LedgerConfig<const H: usize>;
-   impl<const H: usize> ark_crypto_primitives::merkle_tree::Config for LedgerConfig<H> {
-       type Leaf = [Fr; 4];                 // (key, tokenId, balance, nonce)
-       type LeafDigest = Fr;
-       type LeafInnerDigestConverter = IdentityDigestConverter<Fr>;
-       type InnerDigest = Fr;
-       type LeafHash = poseidon::CRH<Fr>;         // params = PoseidonConfig (poseidon_circom_config)
-       type TwoToOneHash = poseidon::TwoToOneCRH<Fr>;
-   }
-   impl<const H: usize> crate::sparsemt::SparseConfig for LedgerConfig<H> { const HEIGHT: usize = H; }
-   // + ConfigGadget + SparseConfigGadget impls (poseidon::constraints::{CRHGadget,TwoToOneCRHGadget})
-   ```
-   Unknowns to resolve on build (arkworks 0.6): exact `ConfigGadget` associated-type names
-   (`Leaf`/`LeafDigest`/`LeafInnerConverter`/`InnerDigest`/`LeafHash`/`TwoToOneHash`), and that
-   `poseidon::CRH`/`TwoToOneCRH` both take `PoseidonConfig` params. `[Fr;4]: Default` holds (std
-   array Default for N≤32); `[Fr;4]: Borrow<[Fr]>` satisfies `CRHScheme::Input=[Fr]`.
-2. **Rewire `synthesize_step`** in `lib.rs`: replace the hand-rolled `merkle_root_gadget`
-   (conditional_select left/right + `h_gadget`) with `MerkleSparseTreeGadget::update_root(old_leaf,
-   new_leaf, index, proof)` for each account touched (from/to). `update_root` returns
-   `(recover_root(old), recover_root(new))` sharing one proof; `index.to_n_bits_le(HEIGHT-1)`;
-   `proof.len() == HEIGHT-1`. Index = the account **slot** (assigned index — behaviour-equivalent
-   to today; key-uniqueness is 2b's job, not 2a's).
-3. **Rebuild the native executor** (`EpochExecutor`) on `MerkleSparseTree` (native
-   `new`/`generate_proof`/`update_and_prove`/`root`) instead of the hand-rolled `MerkleTree`, so
-   witnesses (leaves + sibling proofs) come from the same structure the gadget verifies.
-4. **Get the agreement test green**: `cargo test -p ledger-circuit-newline` — circuit output state
-   must stay bit-identical to the native executor across a batch exercising every op kind. Use a
-   small `H` (e.g. depth 10) in the test.
-5. Commit + push. Update `README.md` (Phase 2a done) and `BUILD_PLAN_A0_A1.md`.
-
-Then **2b**: add `IntervalCRH`/indexed-tree (plasma-blind `core/src/datastructures/nullifier/` +
-`core/src/primitives/crh/`) so account keys are provably unique/non-duplicable (real A0). This is
-where A0 soundness is actually won — see BUILD_PLAN_A0_A1.md §"Phase 2 (A0) design note".
+## Immediate next step (Phase 2b — real A0)
+Add plasma-blind's **`IntervalCRH` indexed/interval tree** so account keys are provably unique /
+non-duplicable (an assigned-index map alone lets an operator place a key at two indices). This is
+where A0 soundness is actually won. Sources (in the re-cloned plasma-blind, see below):
+- `core/src/primitives/crh/{mod.rs,constraints.rs}` — `IntervalCRH` + `IntervalCRHGadget`, and the
+  `Init` trait (`utils.rs`) that parameterizes Poseidon per arity. NOTE: 2b likely needs the
+  `Init`-based `NTo1CRH` path (or an interval-specific config), unlike 2a which deliberately reused
+  `poseidon_circom_config` directly.
+- `core/src/datastructures/nullifier/mod.rs` — `NullifierTreeConfig` (`Leaf = (F, F)` sorted
+  intervals, `LeafHash = IntervalCRH`): the indexed-tree pattern to mirror for the account tree.
+Design: prove non-membership of a new key via the low interval bracketing it, then insert; key the
+ledger accounts through the interval tree. See BUILD_PLAN_A0_A1.md §"Phase 2 (A0) design note".
 
 ## Key source locations (plasma-blind — the port source)
 Scratchpad clones live under the **session-specific** dir and are **likely GONE in a new session**.

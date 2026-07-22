@@ -48,8 +48,9 @@ ownership. The leaf binds both.
 | Phase | Deliverable | Go/no-go gate |
 |---|---|---|
 | **0 ✅** | Spike: new-line EVM decider works end-to-end; gas measured (669k); reuse confirmed | done |
-| **1** | Port the ledger `FCircuit` to the new trait; minimal circuit compiles + native-vs-circuit test green (no decider yet) | circuit compiles + agreement test passes |
-| **2 — A0** | Replace the tree with plasma-blind `sparsemt` (key-indexed → `position=f(key)`; lazy insertion). Native + gadget. | inclusion/update/insert tests pass; key-binding closed |
+| **1 ✅** | Port the ledger `FCircuit` to the new trait; minimal circuit compiles + native-vs-circuit test green (no decider yet) | done |
+| **2a ✅** | Adopt `sparsemt` as the base Merkle map (behaviour-equivalent; assigned-index). Native `MerkleSparseTree` + `MerkleSparseTreeGadget::recover_root`, Poseidon `Config`/`ConfigGadget`. | done — agreement + tamper tests green |
+| **2b — A0** | Add plasma-blind's `IntervalCRH` indexed/interval tree for provable key-uniqueness / non-membership | non-membership + insert tests pass; key-duplication closed |
 | **3 — A1** | Add plasma-blind `schnorr` in-circuit verify on every debit; leaf binds ECDSA owner + delegated Schnorr spend pubkey | unauthorized debit rejected in-circuit; per-op constraint cost measured |
 | **4 — decider + on-chain** | Re-target prover to the LegoGroth16 decider; regenerate `DeciderVerifier.sol`; update `ProvenCheckpoint` (verify call + digest) and the escape hatch's on-chain leaf/Merkle hashing; re-measure gas | **PR #259 merged to `staging`**; forge tests green; gas re-measured at z_len=3 |
 | **5 — hardening** | New Groth16/LegoGroth16 phase-2 ceremony plan; audit realignment; full-bench measurement | ceremony transcripts; audit scope |

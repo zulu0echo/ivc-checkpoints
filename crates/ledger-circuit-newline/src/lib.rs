@@ -32,7 +32,11 @@ use ark_relations::gr1cs::SynthesisError;
 use sonobe_primitives::{circuits::FCircuit, transcripts::poseidon::poseidon_circom_config};
 use std::collections::HashMap;
 
+pub mod config;
 pub mod sparsemt;
+
+use crate::config::{LedgerConfig, LedgerConfigGadget, TREE_H};
+use crate::sparsemt::{constraints::MerkleSparseTreeGadget, MerkleSparseTree};
 
 pub const STATE_LEN: usize = 3;
 pub const VALUE_BITS: usize = 96;
@@ -58,74 +62,13 @@ fn h_gadget(p: &CRHParametersVar<Fr>, input: &[FpVar<Fr>]) -> Result<FpVar<Fr>, 
     CRHGadget::<Fr>::evaluate(p, input)
 }
 
-// ============================ native IMT ============================
+// ============================ tree index bits ============================
 
-#[derive(Clone)]
-pub struct MerkleTree {
-    depth: usize,
-    c: PoseidonConfig<Fr>,
-    zeros: Vec<Fr>,
-    nodes: HashMap<(usize, u64), Fr>,
-}
-
-impl MerkleTree {
-    pub fn new(depth: usize) -> Self {
-        let c = cfg();
-        let mut zeros = vec![Fr::from(0u64)];
-        for l in 0..depth {
-            let z = zeros[l];
-            zeros.push(h2n(&c, z, z));
-        }
-        Self { depth, c, zeros, nodes: HashMap::new() }
-    }
-    fn node(&self, level: usize, idx: u64) -> Fr {
-        *self.nodes.get(&(level, idx)).unwrap_or(&self.zeros[level])
-    }
-    pub fn root(&self) -> Fr {
-        self.node(self.depth, 0)
-    }
-    pub fn index_bits(&self, index: u64) -> Vec<bool> {
-        (0..self.depth).map(|i| (index >> i) & 1 == 1).collect()
-    }
-    pub fn siblings(&self, index: u64) -> Vec<Fr> {
-        let mut s = Vec::with_capacity(self.depth);
-        let mut idx = index;
-        for level in 0..self.depth {
-            s.push(self.node(level, idx ^ 1));
-            idx >>= 1;
-        }
-        s
-    }
-    pub fn set_leaf(&mut self, index: u64, leaf: Fr) {
-        self.nodes.insert((0, index), leaf);
-        let mut idx = index;
-        for level in 0..self.depth {
-            let (l, r) = if idx & 1 == 0 {
-                (self.node(level, idx), self.node(level, idx ^ 1))
-            } else {
-                (self.node(level, idx ^ 1), self.node(level, idx))
-            };
-            let parent = h2n(&self.c, l, r);
-            idx >>= 1;
-            self.nodes.insert((level + 1, idx), parent);
-        }
-    }
-}
-
-// in-circuit: recompute a root from leaf + siblings + index bits
-fn merkle_root_gadget(
-    p: &CRHParametersVar<Fr>,
-    leaf: &FpVar<Fr>,
-    siblings: &[FpVar<Fr>],
-    bits: &[Boolean<Fr>],
-) -> Result<FpVar<Fr>, SynthesisError> {
-    let mut cur = leaf.clone();
-    for (sib, bit) in siblings.iter().zip(bits) {
-        let left = FpVar::conditionally_select(bit, sib, &cur)?;
-        let right = FpVar::conditionally_select(bit, &cur, sib)?;
-        cur = h_gadget(p, &[left, right])?;
-    }
-    Ok(cur)
+// LSB-first path bits for a leaf at assigned position `index` in a `depth`-level tree.
+// Matches plasma-blind `sparsemt`'s convention (bit i = "node at level i is a right child"),
+// so these bits drive `MerkleSparseTreeGadget::recover_root` against `MerkleSparseTree::siblings`.
+fn index_bits(index: u64, depth: usize) -> Vec<bool> {
+    (0..depth).map(|i| (index >> i) & 1 == 1).collect()
 }
 
 // ============================ ops (plain data) ============================
@@ -225,8 +168,14 @@ impl FCircuit for LedgerCircuit {
         ext: Self::ExternalInputs,
     ) -> Result<(Self::StateVar, Self::ExternalOutputs), SynthesisError> {
         assert_eq!(ext.ops.len(), self.batch, "batch size mismatch");
+        assert_eq!(self.depth, TREE_H - 1, "depth must equal TREE_H - 1");
         let cs = state[0].cs();
         let p = CRHParametersVar::<Fr>::new_constant(cs.clone(), self.c.clone())?;
+        // plasma-blind sparse-Merkle-tree gadget; both hash params are the (constant) Poseidon config.
+        let mt = MerkleSparseTreeGadget::<LedgerConfig<TREE_H>, Fr, LedgerConfigGadget<TREE_H>>::new(
+            p.clone(),
+            p.clone(),
+        );
         let withdraw_code = FpVar::constant(Fr::from(WITHDRAW));
         let one = FpVar::<Fr>::one();
 
@@ -258,9 +207,10 @@ impl FCircuit for LedgerCircuit {
                 to_bits.push(Boolean::new_witness(cs.clone(), || Ok(op.to_index_bits[d]))?);
             }
 
-            // (1) inclusion of `from` against current root
-            let from_old_leaf = h_gadget(&p, &[from_key.clone(), token_id.clone(), from_old_balance.clone(), from_old_nonce.clone()])?;
-            let from_old_root = merkle_root_gadget(&p, &from_old_leaf, &from_sibs, &from_bits)?;
+            // (1) inclusion of `from` against current root (leaf preimage hashed inside recover_root)
+            let from_old_leaf =
+                [from_key.clone(), token_id.clone(), from_old_balance.clone(), from_old_nonce.clone()];
+            let from_old_root = mt.recover_root(&from_old_leaf, &from_bits, &from_sibs)?;
             from_old_root.conditional_enforce_equal(&state_root, &active)?;
 
             // (2) solvency + 96-bit range
@@ -274,20 +224,23 @@ impl FCircuit for LedgerCircuit {
 
             // (4a) debit -> intermediate root
             let from_new_nonce = &from_old_nonce + &one;
-            let from_new_leaf = h_gadget(&p, &[from_key.clone(), token_id.clone(), from_new_balance.clone(), from_new_nonce])?;
-            let inter_active = merkle_root_gadget(&p, &from_new_leaf, &from_sibs, &from_bits)?;
+            let from_new_leaf =
+                [from_key.clone(), token_id.clone(), from_new_balance.clone(), from_new_nonce];
+            let inter_active = mt.recover_root(&from_new_leaf, &from_bits, &from_sibs)?;
             let inter_root = FpVar::conditionally_select(&active, &inter_active, &state_root)?;
 
             // to inclusion vs intermediate
-            let to_old_leaf = h_gadget(&p, &[to_key.clone(), token_id.clone(), to_old_balance.clone(), to_old_nonce.clone()])?;
-            let to_old_root = merkle_root_gadget(&p, &to_old_leaf, &to_sibs, &to_bits)?;
+            let to_old_leaf =
+                [to_key.clone(), token_id.clone(), to_old_balance.clone(), to_old_nonce.clone()];
+            let to_old_root = mt.recover_root(&to_old_leaf, &to_bits, &to_sibs)?;
             to_old_root.conditional_enforce_equal(&inter_root, &active)?;
 
             // (4b) credit
             let to_new_balance = &to_old_balance + &amount;
             enforce_bit_width(&to_new_balance, VALUE_BITS)?;
-            let to_new_leaf = h_gadget(&p, &[to_key.clone(), token_id.clone(), to_new_balance, to_old_nonce.clone()])?;
-            let new_active = merkle_root_gadget(&p, &to_new_leaf, &to_sibs, &to_bits)?;
+            let to_new_leaf =
+                [to_key.clone(), token_id.clone(), to_new_balance, to_old_nonce.clone()];
+            let new_active = mt.recover_root(&to_new_leaf, &to_bits, &to_sibs)?;
             state_root = FpVar::conditionally_select(&active, &new_active, &inter_root)?;
 
             // (5a) opsAcc
@@ -309,7 +262,7 @@ impl FCircuit for LedgerCircuit {
 // ============================ native executor ============================
 
 pub struct EpochExecutor {
-    tree: MerkleTree,
+    tree: MerkleSparseTree<LedgerConfig<TREE_H>>,
     c: PoseidonConfig<Fr>,
     slots: HashMap<Vec<u8>, u64>,
     balances: HashMap<Vec<u8>, u128>,
@@ -327,9 +280,12 @@ fn key_bytes(k: Fr) -> Vec<u8> {
 
 impl EpochExecutor {
     pub fn new(depth: usize) -> Self {
+        assert_eq!(depth, TREE_H - 1, "depth must equal TREE_H - 1");
+        let c = cfg();
+        let tree = MerkleSparseTree::<LedgerConfig<TREE_H>>::blank(&c, &c);
         Self {
-            tree: MerkleTree::new(depth),
-            c: cfg(),
+            tree,
+            c,
             slots: HashMap::new(),
             balances: HashMap::new(),
             nonces: HashMap::new(),
@@ -348,8 +304,9 @@ impl EpochExecutor {
         });
         self.balances.insert(k.clone(), bal);
         self.nonces.insert(k.clone(), nonce);
-        let leaf = h4n(&self.c, key, token, Fr::from(bal), Fr::from(nonce));
-        self.tree.set_leaf(slot, leaf);
+        self.tree
+            .update_and_prove(slot as usize, &[key, token, Fr::from(bal), Fr::from(nonce)])
+            .expect("register: tree update");
     }
     pub fn initial_state(&self) -> [Fr; 3] {
         [self.tree.root(), Fr::from(0u64), Fr::from(0u64)]
@@ -364,20 +321,27 @@ impl EpochExecutor {
         let fslot = self.slots[&fk];
         let tslot = self.slots[&tk];
         assert!(fbal >= amount, "insufficient");
-        let fbits: Vec<bool> = self.tree.index_bits(fslot);
-        let fsibs: Vec<Fr> = self.tree.siblings(fslot);
+        // `from` siblings against the CURRENT root (valid for both old and new `from` leaf,
+        // since updating a leaf leaves its own co-path siblings unchanged).
+        let fbits: Vec<bool> = index_bits(fslot, self.depth);
+        let fsibs: Vec<Fr> = self.tree.siblings(fslot as usize).expect("from siblings");
         let fnew = fbal - amount;
         let fnn = fnonce + 1;
-        self.tree.set_leaf(fslot, h4n(&self.c, from, token, Fr::from(fnew), Fr::from(fnn)));
+        self.tree
+            .update_and_prove(fslot as usize, &[from, token, Fr::from(fnew), Fr::from(fnn)])
+            .expect("from: tree update");
         self.balances.insert(fk.clone(), fnew);
         self.nonces.insert(fk.clone(), fnn);
 
         let tbal = self.balances[&tk];
         let tnonce = self.nonces[&tk];
-        let tbits: Vec<bool> = self.tree.index_bits(tslot);
-        let tsibs: Vec<Fr> = self.tree.siblings(tslot);
+        // `to` siblings against the INTERMEDIATE root (after the `from` update).
+        let tbits: Vec<bool> = index_bits(tslot, self.depth);
+        let tsibs: Vec<Fr> = self.tree.siblings(tslot as usize).expect("to siblings");
         let tnew = tbal + amount;
-        self.tree.set_leaf(tslot, h4n(&self.c, to, token, Fr::from(tnew), Fr::from(tnonce)));
+        self.tree
+            .update_and_prove(tslot as usize, &[to, token, Fr::from(tnew), Fr::from(tnonce)])
+            .expect("to: tree update");
         self.balances.insert(tk.clone(), tnew);
 
         let op_hash = h_native(&self.c, vec![Fr::from(kind), from, to, token, Fr::from(amount), Fr::from(fnonce)]);
@@ -412,7 +376,7 @@ mod tests {
 
     #[test]
     fn single_batch_native_matches_circuit() {
-        let d = 10usize;
+        let d = config::TREE_H - 1;
         let b = 4usize;
         let token = Fr::from(1u64);
         let pool = Fr::from(1000u64);
@@ -448,5 +412,38 @@ mod tests {
         assert!(cs.is_satisfied().unwrap(), "circuit satisfied");
         let got: Vec<Fr> = z_next.iter().map(|v| v.value().unwrap()).collect();
         assert_eq!(got, z_expected.to_vec(), "circuit z_next == native");
+    }
+
+    // Prove the sparse-Merkle inclusion constraints actually bind: corrupt one `from` sibling
+    // in the first op's witness and the constraint system must become unsatisfiable.
+    #[test]
+    fn tampered_sibling_breaks_inclusion() {
+        let d = config::TREE_H - 1;
+        let b = 2usize;
+        let token = Fr::from(1u64);
+        let pool = Fr::from(1000u64);
+        let a = Fr::from(2001u64);
+        let mut exec = EpochExecutor::new(d);
+        exec.register(pool, token, 1_000_000, 0);
+        exec.register(a, token, 0, 0);
+        let z0 = exec.initial_state();
+
+        let mut ops = vec![exec.apply(0, pool, a, token, 500), OpWitness::padding(d)];
+        // Flip a sibling the `from` inclusion proof depends on.
+        ops[0].from_siblings[0] += Fr::from(1u64);
+
+        let circuit = LedgerCircuit::new(b, d);
+        use ark_relations::gr1cs::ConstraintSystem;
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let z_var =
+            <[FpVar<Fr>; 3] as AllocVar<[Fr; 3], Fr>>::new_witness(cs.clone(), || Ok(z0)).unwrap();
+        let i = FpVar::new_witness(cs.clone(), || Ok(Fr::from(0u64))).unwrap();
+        let _ = circuit
+            .synthesize_step(i, z_var, EpochStepInput { ops })
+            .unwrap();
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "tampered sibling must violate the inclusion constraint"
+        );
     }
 }
