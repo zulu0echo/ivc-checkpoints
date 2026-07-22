@@ -1,96 +1,12 @@
-# ivc-checkpoints — Rust workspace
-#
-# Prototype of a validity-proven checkpoint for an off-chain balance ledger.
-# Pinned to sonobe main @ 63f2930d363150d4490ce2c4be8e0c25c2e1d92c (see README §Pinned versions).
-#
-# Dependency pinning note (the hard part — see README §Pinned versions for the full story):
-# sonobe's own Cargo.toml [patch] repoints arkworks at UNpinned git HEADs, and cargo only
-# honors [patch] from the *root* workspace. Reproducing sonobe's build today requires
-# pinning arkworks to the 0.5.x-with-SmallFp set it built against (HEAD has since moved to
-# 0.6.0 / MSRV 1.89). ark-groth16 @ b3b4a15 additionally pulls algebra/snark via its OWN
-# git deps (unreachable by [patch.crates-io]); a git-URL patch to the same repo is forbidden
-# by cargo, so algebra@4cec9f0e and snark@845ce9d are VENDORED under vendor/ and every
-# consumer (crates.io and git) is patched onto those paths, unifying the graph.
-
+# newline-port branch: the ledger circuit ported to the NEW (audited) sonobe line
+# (sonobe-primitives @ 243391e / revamp-decider, crates.io arkworks 0.6, gr1cs).
+# NOTE: this branch deliberately diverges from `main` (the classic prototype). The classic
+# arkworks-0.5 crates + vendor/ are excluded here (they use a [patch] incompatible with 0.6).
+# No vendoring/patches needed on the new line — arkworks 0.6 is on crates.io.
 [workspace]
 resolver = "2"
-members = [
-    "crates/ledger-circuit",
-    "crates/prover",
-    "bench",
-]
-# Vendored arkworks crates are their own workspace; keep them out of ours.
-exclude = ["vendor"]
+members = ["crates/ledger-circuit-newline"]
+exclude = ["crates/ledger-circuit", "crates/prover", "bench", "vendor"]
 
-[workspace.package]
-edition = "2021"
-license = "MIT"
-rust-version = "1.97.1"
-repository = "https://github.com/zulu0echo/ivc-checkpoints"
-
-[workspace.dependencies]
-# --- sonobe (pinned) ---------------------------------------------------------
-# default features include "parallel" (rayon) — REQUIRED: sonobe's non-parallel espresso
-# sum-check path does not compile.
-folding-schemes = { git = "https://github.com/privacy-ethereum/sonobe", rev = "63f2930d363150d4490ce2c4be8e0c25c2e1d92c" }
-solidity-verifiers = { git = "https://github.com/privacy-ethereum/sonobe", rev = "63f2930d363150d4490ce2c4be8e0c25c2e1d92c" }
-
-# --- arkworks (versions must match sonobe; repointed by [patch] below) ---
-ark-bn254             = { version = "^0.5.0", default-features = false }
-ark-grumpkin          = { version = "^0.5.0", default-features = false }
-ark-crypto-primitives = { version = "^0.5.0", default-features = false }
-ark-ec                = { version = "^0.5.0", default-features = false }
-ark-ff                = { version = "^0.5.0", default-features = false }
-ark-groth16           = { version = "^0.5.0", default-features = false }
-ark-poly              = { version = "^0.5.0", default-features = false }
-ark-r1cs-std          = { version = "^0.5.0", default-features = false }
-ark-relations         = { version = "^0.5.0", default-features = false }
-ark-serialize         = { version = "^0.5.0" }
-ark-std               = { version = "^0.5.0", default-features = false }
-
-# --- misc --------------------------------------------------------------------
-rand       = "0.8.5"
-serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
-num-bigint = "0.4"
-hex        = "0.4"
-sha3       = "0.10"
-anyhow     = "1"
-clap       = { version = "4", features = ["derive"] }
-
-# =============================================================================
-# Dependency patching. See the header note. arkworks/algebra @ 4cec9f0e (0.5.x, the newest
-# with SmallFp before the 0.6.0 release) and arkworks/snark @ 845ce9d (gr1cs) are VENDORED
-# under vendor/. Everything is routed onto the vendored paths / pinned forks so the whole
-# graph resolves to one crate per package.
-# =============================================================================
-[patch.crates-io]
-ark-ff        = { path = "vendor/algebra/ff" }
-ark-ec        = { path = "vendor/algebra/ec" }
-ark-serialize = { path = "vendor/algebra/serialize" }
-ark-poly      = { path = "vendor/algebra/poly" }
-ark-bn254     = { path = "vendor/algebra/curves/bn254" }
-ark-grumpkin  = { path = "vendor/algebra/curves/grumpkin" }
-ark-relations = { path = "vendor/snark/relations" }
-ark-snark     = { path = "vendor/snark/snark" }
-ark-std       = { path = "vendor/std" }
-ark-poly-commit = { git = "https://github.com/arkworks-rs/poly-commit", rev = "a05ec99d0d3e46c8ba0d6d3592980777bc2847e8" }
-# ark-groth16 @ b3b4a15 pulled arkworks via its OWN git deps (unreachable by any [patch]
-# that survives cargo's git-source rules). It is VENDORED under vendor/groth16 with those
-# git deps rewritten to crates.io `version` reqs, so they route through [patch.crates-io]
-# onto the vendored algebra/snark/std and the flyingnobita forks — one crate per package.
-ark-groth16   = { path = "vendor/groth16" }
-# flyingnobita forks (folding-schemes' r1cs-std / crypto-primitives), VENDORED with their
-# own arkworks git deps rewritten to crates.io reqs (same reason as groth16 above).
-ark-crypto-primitives = { path = "vendor/crypto-primitives/crypto-primitives" }
-ark-r1cs-std  = { path = "vendor/r1cs-std" }  # flyingnobita "perf/sw-updated" @ b4bab0c
-
-# Release profile: the decider prove is FFT/MSM-bound; keep full opt.
 [profile.release]
-opt-level = 3
-lto = "thin"
-
-# Build dependencies (arkworks) optimized even in dev, so the constraint-count test and the
-# small decider path are tolerable without a full release build.
-[profile.dev.package."*"]
 opt-level = 3

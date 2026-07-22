@@ -1,0 +1,15 @@
+[package]
+name = "ledger-circuit-newline"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+description = "Phase-1 port of the ledger F-circuit to the new (audited) sonobe line (arkworks 0.6, gr1cs)"
+
+[dependencies]
+sonobe-primitives = { git = "https://github.com/privacy-ethereum/sonobe", rev = "243391ebc14ad993f425802eb9dbaf44fdd54436" }
+ark-bn254 = { version = "0.6.0", features = ["curve", "r1cs"] }
+ark-ff = "0.6.0"
+ark-std = "0.6.0"
+ark-relations = "0.6.0"
+ark-r1cs-std = "0.6.0"
+ark-crypto-primitives = { version = "0.6.0", features = ["constraints", "sponge", "crh"] }
