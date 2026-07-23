@@ -24,9 +24,20 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 > **[technical report](docs/REPORT.md)** — a self-contained explainer of what this is, what it
 > costs, and why it matters, with diagrams and charts. Where it fits (and where it doesn't):
 > **[docs/USE_CASES.md](docs/USE_CASES.md)**. Sovereignty & exit roadmap:
-> **[docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)** (deep-build plan for full non-custody:
-> **[docs/BUILD_PLAN_A0_A1.md](docs/BUILD_PLAN_A0_A1.md)**). Security details:
+> **[docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md)**. Security details:
 > **[docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)**.
+
+> 🟢 **Full non-custody (A0 + A1) — implemented on the `newline-port` branch.** `main` (this
+> document) is the classic prototype where the operator is trusted for arithmetic beyond the
+> escape hatch. A parallel line migrates to the audited sonobe branch and **enforces full
+> non-custody in-circuit**: the operator can neither forge/duplicate an account (**A0**, indexed
+> interval tree) nor move a balance without the account's spend key (**A1**, per-debit Schnorr).
+> It folds through a **LegoGroth16 decider** that verifies on-chain for **≈696k gas** (measured,
+> cheaper than this line), with the `ProvenCheckpoint` contract rewired to the arity-6 leaf +
+> new verifier ABI. Plan: **[docs/BUILD_PLAN_A0_A1.md](docs/BUILD_PLAN_A0_A1.md)**; measured
+> results: **[docs/DECIDER_RESULTS.md](docs/DECIDER_RESULTS.md)**; ceremony + audit scope:
+> **[docs/CEREMONY_AND_AUDIT.md](docs/CEREMONY_AND_AUDIT.md)**. Still **dev-setup** (needs the
+> ceremony) and pinned to an unmerged sonobe PR.
 
 ---
 

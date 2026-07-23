@@ -65,13 +65,31 @@ the sonobe `revamp/decider` checkout (it uses that crate's in-tree EVM test harn
 in-repo prover binary is deferred with the `ProvenCheckpoint` rewire below (both want the same
 git-pinned decider deps wired into a runnable crate).
 
-## Still open (tracked for Phase 4 completion / audit)
-- **`ProvenCheckpoint` on-chain rewire is not done.** The Solidity contract still targets the
-  classic `DeciderEth` ABI and hashes an **arity-4** leaf. To finish: swap the verify call to
-  `verifyDeciderProof`, store/compare the `z = [root, opsAcc, netsAcc]` digest, and extend the exit
-  path's on-chain Poseidon (`PoseidonT5`) to the **arity-6** interval leaf
-  `(key, next_key, token, balance, nonce, pk_hash)` — re-derived for `poseidon_circom_config`.
+## On-chain `ProvenCheckpoint` rewire — DONE
+Implemented on this branch (Solidity/Foundry, 22/22 forge tests green):
+- **`PoseidonT5.sol` → `hash6` + `leafHash`** for the arity-6 interval leaf
+  `(key, next_key, token, balance, nonce, pk_hash)`. `poseidon_circom_config` is
+  **parameter-identical** to the classic `poseidon_canonical_config`, so the existing permutation
+  constants are reused (verified cross-version by `generated/newline/poseidon_fixture.json`); `hash6`
+  is the rate-4 sponge (absorb 4 → permute → absorb 2 → permute). Pinned by `PoseidonNewline.t.sol`.
+- **`ProvenCheckpointNewline.sol`** — settlement calls the new `verifyDeciderProof` ABI (reverts on a
+  bad proof; folded commitments reconstructed on-chain), stores/compares the `z = [root, opsAcc,
+  netsAcc]` digest, recomputes `netsAcc` on-chain, and the escape hatch opens the **arity-6** leaf.
+  `IDeciderVerifier.sol` is the calling interface. Governance (timelock/freeze) + nets + chaining
+  carried over from the classic contract.
+- **`ProvenCheckpointNewline.t.sol`** — arity-6 exit against a real in-test Merkle tree (+ double-exit
+  / wrong-balance rejection) and settlement plumbing (happy path, bad-proof reject, nets-mismatch
+  reject) via a `MockDecider`. The classic `ProvenCheckpoint`/tests are untouched (still the `main`
+  reference).
+
+Deferred (mechanical): a real-proof **end-to-end** forge test that drives `settleEpochProven` through
+the actual generated `DeciderVerifier.sol` needs the structured proof calldata exported from the
+prover. The cryptographic verification itself is already proven in revm (696,556 gas above); the
+forge test uses a mock verifier for the contract-logic plumbing.
+
+## Still open (audit / production)
 - **Pinned to an unmerged branch.** rev `243391e` is PR #259, not yet on `staging`; re-pin when it
   merges and reconcile with plasma-blind's `dmpierre/sonobe@8269ea4`.
+- **Dev setup.** The generated verifier uses random keys — needs the Phase-5 ceremony before deploy.
 - Batch/reg-batch are fixed per step; a production run should re-measure at larger `batch` and
   `TREE_H = 23` (depth 22), and on hardware with more RAM headroom.
