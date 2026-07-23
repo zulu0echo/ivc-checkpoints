@@ -16,10 +16,12 @@ The primitive is a good match when **all** of these hold:
    double-spend, no negative balances, value conserved, nets consistent — **cheaply**, without a
    per-account storage write and without standing up a full rollup.
 5. Individual balances, amounts, and account identities **can stay off-chain**.
-6. An **operator-for-liveness** trust model is acceptable. With the escape hatch, funds are
-   non-custodial *for exit* (a user can always withdraw their proven balance with their own key);
-   full non-custody — the operator can't move a balance even *before* you exit — is on the
-   roadmap ([DECENTRALIZATION.md](DECENTRALIZATION.md)), not yet implemented.
+6. An **operator-for-liveness** trust model is acceptable **on the `main` line**. With the escape
+   hatch, funds are non-custodial *for exit* (a user can always withdraw their proven balance with
+   their own key); full non-custody — the operator can't move a balance even *before* you exit — is
+   **implemented on the `newline-port` branch** (A0 indexed tree + A1 per-debit Schnorr; dev-setup,
+   ≈696k-gas decider — see [BUILD_PLAN_A0_A1.md](BUILD_PLAN_A0_A1.md) and
+   [DECIDER_RESULTS.md](DECIDER_RESULTS.md)).
 
 ## Where that shape shows up
 
@@ -42,10 +44,12 @@ on-chain linkage, so recipient privacy composes cleanly on top (see
 
 - **Confidential settlement amounts** — per-payee net amounts are public on-chain. If amounts
   must be hidden, you need a shielded pool, not this.
-- **Full decentralization / non-custody** — this proves an *operator's* books are correct and
-  lets users unilaterally *exit* (escape hatch), but it does not remove the operator: until
-  in-circuit user-signed debits land, the operator can still move a balance before you exit
-  (see [DECENTRALIZATION.md](DECENTRALIZATION.md)).
+- **Full decentralization / non-custody** — *on the `main` line* this proves an *operator's* books
+  are correct and lets users unilaterally *exit* (escape hatch) but does not remove the operator's
+  authority to move a balance before you exit. The **`newline-port` branch closes that gap**
+  (in-circuit user-signed debits + unforgeable accounts have landed — see
+  [DECIDER_RESULTS.md](DECIDER_RESULTS.md)); it is still dev-setup and pinned to an unmerged sonobe
+  PR. Removing the operator from *sequencing* entirely is a rollup, which this is not.
 - **Many thousands of distinct settlement payees per epoch** — the on-chain nets recomputation is
   currently O(payees) and expensive; this needs the production fix (per-payee claims against a
   proven `netsRoot`, or a Poseidon precompile) before large payee sets are practical.

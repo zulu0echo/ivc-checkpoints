@@ -9,14 +9,23 @@ data-availability cost or its loss of amount-privacy. The price of staying priva
 exit-liveness depends on *your own branch* being available (held by you, or served by the
 operator), not on globally reconstructable data.
 
-Status legend: **✅ implemented & tested** · **📐 specified (deferred — deeper cryptography)**.
+Status legend: **✅ implemented & tested (this `main` line)** · **📐 specified (deferred)** ·
+**🟢 implemented on the `newline-port` branch** (the audited-sonobe migration).
+
+> **🟢 Update — the deferred cryptography (A0 + A1) is now built on `newline-port`.** What this
+> document specifies as "deferred deeper cryptography" is implemented and tested on the migration
+> branch: the key-indexed **indexed interval tree** (A0) and **in-circuit per-debit Schnorr** (A1),
+> folded through a LegoGroth16 decider measured at ≈696k on-chain gas, with `ProvenCheckpoint`
+> rewired to the arity-6 leaf. It remains dev-setup + pinned to an unmerged sonobe PR. See
+> [BUILD_PLAN_A0_A1.md](BUILD_PLAN_A0_A1.md), [DECIDER_RESULTS.md](DECIDER_RESULTS.md),
+> [CEREMONY_AND_AUDIT.md](CEREMONY_AND_AUDIT.md). The 📐 markers below describe the `main` line.
 
 Everything here rests on one prerequisite:
 
-> **Key-indexed tree (📐, deferred).** Move to a key-indexed *indexed Merkle tree* so each leaf
-> provably belongs to exactly one owner key and can't be duplicated. Unforgeable leaf ownership
-> and lazy account insertion both need it. It is the #1 production requirement
-> ([TRUST_MODEL.md §6](TRUST_MODEL.md)).
+> **Key-indexed tree (📐 on `main`; 🟢 done on `newline-port`).** Move to a key-indexed *indexed
+> Merkle tree* so each leaf provably belongs to exactly one owner key and can't be duplicated.
+> Unforgeable leaf ownership and lazy account insertion both need it. It is the #1 production
+> requirement ([TRUST_MODEL.md §6](TRUST_MODEL.md)).
 
 ---
 
@@ -60,23 +69,24 @@ marks it served; `exitDataOverdue(epoch)` is true once a request goes unanswered
 
 ---
 
-## Specified, deferred (📐 — deeper cryptography)
+## Specified here (📐 on `main`) — A0 + A1 now built on `newline-port` (🟢)
 
-These deliver *full* sovereignty but are each a substantial circuit addition with its own build
-and audit effort, so they are specified here rather than half-implemented.
+These deliver *full* sovereignty and are each a substantial circuit addition with its own build
+and audit effort. They are specified here for the `main` line; **A0 and A1 are now implemented and
+tested on the `newline-port` branch** (see [DECIDER_RESULTS.md](DECIDER_RESULTS.md)).
 
-### Key-indexed indexed Merkle tree (A0)
+### Key-indexed indexed Merkle tree (A0) — 🟢 done on `newline-port`
 Replace the dense-slot tree + off-circuit key→slot map with an indexed Merkle tree: leaves are
 key-sorted with `next` pointers, insertion proves *non-membership* of the new key, and every
 op's position is `= f(key)`. Closes the key-duplication soundness gap and makes **lazy account
 creation** sound (required once accounts are one-time / unlinkable addresses — see
 [REPORT.md](REPORT.md) §Composing with one-time / unlinkable recipient addresses).
 
-### In-circuit user-authorized debits (A1)
-Bind each leaf to an owner public key and require the circuit to verify an **EdDSA signature by
-that owner over every debit** (Poseidon-friendly curve, ~a few thousand constraints/op). This is
-what stops an operator from moving your balance in an *arithmetically-valid* way (today the proof
-checks conservation, not authorization). Privacy is preserved — keys/signatures are witness data.
+### In-circuit user-authorized debits (A1) — 🟢 done on `newline-port`
+Bind each leaf to an owner public key and require the circuit to verify a **signature by that owner
+over every debit** (on `newline-port`: a Schnorr signature over Grumpkin, ~5,136 constraints/op).
+This is what stops an operator from moving your balance in an *arithmetically-valid* way (the base
+proof checks conservation, not authorization). Privacy is preserved — keys/signatures are witness data.
 
 ### Forced-inclusion queue (A4, optional)
 An on-chain queue where a user posts an owner-signed op (a transfer *or* an exit) that the next
@@ -93,8 +103,8 @@ stale root" into "force your transaction through." Only needed if active censors
 | Funds can't be **trapped** (always exitable with your key) | ✅ implemented (escape hatch) |
 | Governance can't **silently** swap the verifier | ✅ implemented (timelock + freeze) |
 | Data-withholding is **attributable** on-chain | ✅ implemented (branch challenge) |
-| Operator can't move your balance **without your signature** | 📐 deferred (A1) |
-| Leaf ownership is **unforgeable** / lazy insertion is sound | 📐 deferred (A0) |
+| Operator can't move your balance **without your signature** | 📐 on `main` · 🟢 done on `newline-port` (A1) |
+| Leaf ownership is **unforgeable** / lazy insertion is sound | 📐 on `main` · 🟢 done on `newline-port` (A0) |
 | Spends (not just exit) are **censorship-resistant** | 📐 deferred (A4) |
 
 So today: **you can always unilaterally withdraw your last-proven balance** (operator can't trap
