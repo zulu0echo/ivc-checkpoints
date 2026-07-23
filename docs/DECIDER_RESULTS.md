@@ -25,7 +25,7 @@ step was folded (real indexed-tree inclusion + a real Schnorr signature verify) 
 | In-circuit Schnorr verify | ~5,136 constraints |
 
 ### Prover wall-time breakdown (measured, this circuit)
-| Phase | LegoGroth16 (new line) | Groth16 (`main`, small workload) |
+| Phase | LegoGroth16 (new line, **full** decider) | Groth16 (`main`, **`light-test` reduced** decider) |
 |---|---|---|
 | IVC keygen | ~12 s | (part of setup) |
 | Fold | ~0.27 s/step | ~1.69 s/step |
@@ -33,14 +33,25 @@ step was folded (real indexed-tree inclusion + a real Schnorr signature verify) 
 | **Decider PROVE** | **~85 s** | **~27 s** |
 | Peak RSS | ~7.7 GB | ~6.6 GB |
 
+> **⚠️ Read the prove/RAM rows with care — they are not a like-for-like head-to-head.** The classic
+> numbers were measured with the prover's **`light-test`** feature, which **shrinks the
+> `DeciderEthCircuit` by skipping its multi-million-constraint in-circuit Pedersen checks** and is
+> explicitly *not* production-sound (its verifier corresponds to the reduced circuit). The classic
+> line's **full** decider effectively requires that reduction to run on modest hardware at all. The
+> new-line figures are the **full, sound** decider — the CycleFold architecture offloads the
+> expensive EC/commitment work, so no shrink is needed. So this is *not* "Groth16 proves 3× faster";
+> a full-vs-full comparison would require running the classic decider **without** `light-test`
+> (multi-million constraints; may exceed 24 GB), which has not been measured here.
+
 **Takeaways.** (1) On-chain verifier cost is essentially **independent of step-circuit complexity**
 — the whole A0 tree + A1 Schnorr over the trivial circuit cost only ~+27k gas (the `z_len 1→3`
 public-input delta), and the new line is **~13% cheaper on-chain than classic Groth16** while doing
-strictly more. (2) The big ~310 s wall is **dominated by decider *keygen* (~201 s), a one-time
-per-circuit setup** (the ceremony output in production — *not* a per-epoch cost), not proving.
-(3) **Isolated decider PROVE is ~85 s vs classic ~27 s (~3×)**, and peak RAM +17% — but this is
-LegoGroth16 over a *bigger* circuit (arity-6 + ~5,136-constraint Schnorr/debit) vs Groth16 over a
-smaller one, so it is **not** a like-for-like primitive comparison. Both fit comfortably in 24 GB.
+strictly more. On-chain verify gas is a **fair** comparison (Groth16-family verify cost is
+~constant, independent of `light-test`). (2) The big ~310 s wall is **dominated by decider *keygen*
+(~201 s), a one-time per-circuit setup** (the ceremony output in production — *not* a per-epoch
+cost), not proving. (3) The new line runs a **full, sound** decider at ~85 s / ~7.7 GB / ~201 s
+one-time keygen, comfortably within 24 GB — whereas the classic line's numbers reflect a reduced
+(`light-test`) circuit and its full decider is unmeasured here.
 
 ## Generated artifacts (dev setup)
 [`contracts/generated/newline/DeciderVerifier.sol`](../contracts/generated/newline/DeciderVerifier.sol)

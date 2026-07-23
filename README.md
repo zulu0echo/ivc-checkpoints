@@ -48,15 +48,19 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 | Decider | Groth16 `DeciderEth` | LegoGroth16 |
 | Stack | arkworks 0.5 (vendored), classic sonobe | arkworks 0.6, audited sonobe line (PR #259) |
 | On-chain verify | ~800k gas | **~696k gas** (cheaper) |
-| Decider **prove** | ~27 s | ~85 s |
-| Decider **keygen** (one-time) | dev-cached | ~201 s |
-| Peak prover RAM | ~6.6 GB | ~7.7 GB |
+| Decider **prove** | ~27 s *(reduced circuit — see below)* | ~85 s (full) |
+| Peak prover RAM | ~6.6 GB *(reduced)* | ~7.7 GB (full) |
 
-> **Reading the prove/RAM numbers:** `newline-port` proves ~3× slower and uses ~17% more RAM, but
-> that is **LegoGroth16 over a bigger circuit** (arity-6 leaves + a ~5,136-constraint Schnorr per
-> debit) vs Groth16 over a smaller one — **not** a like-for-like primitive swap. The ~200 s decider
-> keygen is a **one-time** per-circuit setup (the ceremony output in production), not a per-epoch
-> cost. Full breakdown: **[docs/DECIDER_RESULTS.md](docs/DECIDER_RESULTS.md)**.
+> **⚠️ The prove/RAM numbers are NOT a fair head-to-head.** The classic figures were measured with
+> the `light-test` feature, which **shrinks the `DeciderEthCircuit` (skips its multi-million-constraint
+> in-circuit Pedersen checks)** and is *not* production-sound. The classic line's **full** decider is
+> so heavy it effectively *requires* that reduction to run on modest hardware. The `newline-port`
+> figures are the **full, sound** decider with no such shrink — the CycleFold architecture offloads
+> the expensive EC/commitment work, so it doesn't need one. So the honest read is **not** "classic is
+> 3× faster"; it's that the new line runs a full sound decider (~85 s / ~7.7 GB / ~201 s one-time
+> keygen) where the classic line can't without an unsound shortcut. On-chain **verify gas** (~800k vs
+> ~696k) is a fair comparison (Groth16-family verify cost is ~constant). Full breakdown + caveats:
+> **[docs/DECIDER_RESULTS.md](docs/DECIDER_RESULTS.md)**.
 
 ---
 
