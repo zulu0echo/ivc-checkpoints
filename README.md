@@ -39,6 +39,25 @@ settlement. It's a **working prototype + measurement harness**: it turns the **[
 > **[docs/CEREMONY_AND_AUDIT.md](docs/CEREMONY_AND_AUDIT.md)**. Still **dev-setup** (needs the
 > ceremony) and pinned to an unmerged sonobe PR.
 
+### The two branches at a glance (measured)
+
+| | `main` (classic) | `newline-port` (full non-custody) |
+|---|---|---|
+| Custody model | operator trusted for arithmetic + escape-hatch exit | **A0** (unforgeable accounts) + **A1** (per-debit Schnorr) enforced in-circuit |
+| Account tree / leaf | dense-slot, arity-4 | indexed interval tree, arity-6 (`+ next_key, pk_hash`) |
+| Decider | Groth16 `DeciderEth` | LegoGroth16 |
+| Stack | arkworks 0.5 (vendored), classic sonobe | arkworks 0.6, audited sonobe line (PR #259) |
+| On-chain verify | ~800k gas | **~696k gas** (cheaper) |
+| Decider **prove** | ~27 s | ~85 s |
+| Decider **keygen** (one-time) | dev-cached | ~201 s |
+| Peak prover RAM | ~6.6 GB | ~7.7 GB |
+
+> **Reading the prove/RAM numbers:** `newline-port` proves ~3× slower and uses ~17% more RAM, but
+> that is **LegoGroth16 over a bigger circuit** (arity-6 leaves + a ~5,136-constraint Schnorr per
+> debit) vs Groth16 over a smaller one — **not** a like-for-like primitive swap. The ~200 s decider
+> keygen is a **one-time** per-circuit setup (the ceremony output in production), not a per-epoch
+> cost. Full breakdown: **[docs/DECIDER_RESULTS.md](docs/DECIDER_RESULTS.md)**.
+
 ---
 
 ## What it demonstrates
