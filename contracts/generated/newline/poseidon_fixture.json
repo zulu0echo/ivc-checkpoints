@@ -1,0 +1,23 @@
+{
+  "config": "poseidon_circom_config (t=5, rate=4)",
+  "hash2": [
+    { "inputs": ["1", "2"], "output": "0x2dddd542213b9228162ff1b438c3709c057a9550103c9173c6204fb29b802c37" },
+    { "inputs": ["7", "0"], "output": "0x1196d2ab41f5e82aa3713e57d63f60fc0eaeab0541e6c4adf27b78dd357c780" },
+    { "inputs": ["0", "0"], "output": "0x2875620e99eb8e792ddd736e15a21a653ddc6724a8e6133eea0fa9adfeb75e02" },
+    { "inputs": ["123456", "789"], "output": "0x2a15794b82378b3ffa1c88d2419026e104ca8b8fd0ef5cc8215916d48285116c" }
+  ],
+  "hash2Count": 4,
+  "hash4": [
+    { "inputs": ["1", "2", "3", "4"], "output": "0x1148aaef609aa338b27dafd89bb98862d8bb2b429aceac47d86206154ffe053d" },
+    { "inputs": ["0", "0", "0", "0"], "output": "0x2875620e99eb8e792ddd736e15a21a653ddc6724a8e6133eea0fa9adfeb75e02" },
+    { "inputs": ["1000", "1", "500", "0"], "output": "0x1242a24800917f76249c74fdf67b5f83e1ddb188cefe0c0fe85ef153e50d5e99" }
+  ],
+  "hash4Count": 3,
+  "hash6": [
+    { "inputs": ["2001", "900", "1", "0", "0", "0"], "output": "0xfc9009295afece44557f98642f548942623f672899ec9c6208ac355676f3d1a" },
+    { "inputs": ["1000", "0", "1", "999500", "1", "0"], "output": "0x1f4f9bc9fd823df98a67db0c0fe9e38001ea979436a51933d032614ee68ae06" },
+    { "inputs": ["0", "0", "0", "0", "0", "0"], "output": "0x15d0d2974c5b27e2197bed209787dc758486b2650b82900e29ce362d98b86b6" },
+    { "inputs": ["5", "9", "1", "42", "3", "123456"], "output": "0x1458a4a8d4af29557e49495a94dda9b9377e41957f8e6cbb7fd331fac06d0723" }
+  ],
+  "hash6Count": 4
+}

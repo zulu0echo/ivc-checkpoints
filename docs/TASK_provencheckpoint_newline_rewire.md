@@ -1,6 +1,10 @@
 # Task: rewire `ProvenCheckpoint` on-chain for the new-line (A0+A1) decider
 
-**Status:** open — the only substantive unfinished piece of the new-sonobe-line migration.
+**Status: DONE** (this branch) — 22/22 forge tests green. Added: `PoseidonT5.hash6`/`leafHash`,
+`ProvenCheckpointNewline.sol`, `interfaces/IDeciderVerifier.sol`, `PoseidonNewline.t.sol`,
+`ProvenCheckpointNewline.t.sol`, `generated/newline/poseidon_fixture.json`, `gen_poseidon_fixture`
+bin. One mechanical follow-up (a real-proof end-to-end forge test via prover-exported calldata) is
+deferred; the crypto verification is already proven in revm (696,556 gas — see DECIDER_RESULTS.md).
 **Kind:** Solidity / Foundry only. **No new circuit work** — Phases 1–5 (circuit + decider) are done.
 **Branch base:** `newline-port`.
 
