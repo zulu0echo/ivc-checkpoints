@@ -263,9 +263,17 @@ remain visible on-chain, as in any netting checkpoint). On custody, an **escape 
 is now implemented — a user can always withdraw their proven balance with their own key, so funds
 **can't be trapped**; but the operator can still move a balance in a valid transition *before* you
 exit until in-circuit user-signed debits land (deferred — see
-[DECENTRALIZATION.md](DECENTRALIZATION.md)). So today's boundary is **non-custodial funds with an
-operator trusted only for liveness**, not full non-custody. Before production it needs, at minimum:
-a real
+[DECENTRALIZATION.md](DECENTRALIZATION.md)). So today's boundary **on this (`main`) line** is
+**non-custodial funds with an operator trusted only for liveness**, not full non-custody.
+
+> **Update:** full non-custody is now **implemented on the `newline-port` branch** — the operator can
+> neither forge/duplicate an account (**A0**, indexed interval tree, closing the key-to-tree-position
+> gap noted below) nor move a balance without the account's spend key (**A1**, per-debit in-circuit
+> Schnorr). It folds through a LegoGroth16 decider measured at ≈696k on-chain gas. See
+> [BUILD_PLAN_A0_A1.md](BUILD_PLAN_A0_A1.md) + [DECIDER_RESULTS.md](DECIDER_RESULTS.md). It is still
+> dev-setup and pinned to an unmerged sonobe PR (ceremony/audit: [CEREMONY_AND_AUDIT.md](CEREMONY_AND_AUDIT.md)).
+
+Before production this line needs, at minimum: a real
 key-to-tree-position binding (the current tree doesn't enforce it), a real trusted-setup ceremony
 (this uses a dev-mode setup), security audits, and the prover numbers re-measured on 64 GB
 hardware. These are enumerated in [TRUST_MODEL.md §6](TRUST_MODEL.md).

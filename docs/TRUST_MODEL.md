@@ -54,10 +54,17 @@ trusted setup was honest. See §4.
 | Auditor | reads chain | — | — (integrity needs no auditor cooperation) |
 | Account / payee / observer / adversary | nothing | — | — |
 
-Trust **concentration** is deliberately unchanged: the operator custodies funds and authorizes
-transfers. The proof adds *integrity* (arithmetic is proven), not *decentralization* or
-*non-custody*. It does **not** protect an account or payee from the operator's authority — it
-protects the *record* from being arithmetically inconsistent.
+Trust **concentration** is deliberately unchanged **on this (`main`) line**: the operator custodies
+funds and authorizes transfers. The proof adds *integrity* (arithmetic is proven), not
+*decentralization* or *non-custody*. It does **not** protect an account or payee from the operator's
+authority — it protects the *record* from being arithmetically inconsistent.
+
+> **`newline-port` branch:** this concentration IS reduced — full non-custody (A0 account
+> unforgeability via an indexed interval tree + A1 per-debit in-circuit Schnorr) is implemented and
+> the `ProvenCheckpoint` contract is rewired to the arity-6 leaf + LegoGroth16 decider ABI
+> (≈696k gas, measured). Still dev-setup / pinned to an unmerged sonobe PR. See
+> [BUILD_PLAN_A0_A1.md](BUILD_PLAN_A0_A1.md), [DECIDER_RESULTS.md](DECIDER_RESULTS.md),
+> [CEREMONY_AND_AUDIT.md](CEREMONY_AND_AUDIT.md).
 
 ---
 
